@@ -49,5 +49,7 @@ print(summary(fit))
 ## References
 
 [1] Watts, M., Li, M., Su, Y., & Lu, Q. (2025). *Conditional least squares estimation for autoregressive ordered probit models*. Manuscript in preparation.
+
 [2] Li, M., & Lu, Q. (2022). *Changepoint detection in autocorrelated ordinal categorical time series*. *Environmetrics, 33*(7), e2752.
+
 [3] Varin, C., & Vidoni, P. (2006). Pairwise likelihood inference for ordinal categorical time series. *Computational Statistics & Data Analysis, 51*(4), 2365–2373.
