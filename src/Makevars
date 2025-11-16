@@ -1,0 +1,20 @@
+## ---- Makevars (macOS/Linux) ----
+## Build only the pieces we want; do NOT compile mvndstpack.f directly.
+OBJECTS = init_CLSW.o pair_aop_CLSW.o mvndstpack_pkg.o
+
+all: $(SHLIB)
+
+## Generate a subroutines-only file from your original Fortran
+mvndstpack_pkg.f: mvndstpack.f
+	@echo "Generating $@ from $< (dropping test driver without editing source)..."
+	@start=$$(grep -n -i -E '^[[:space:]]*SUBROUTINE[[:space:]]+MVNDST' $< | head -n1 | cut -d: -f1); \
+	if [ -z "$$start" ]; then \
+	  echo "Could not find SUBROUTINE MVNDST in $<"; exit 1; \
+	fi; \
+	tail -n +$$start $< > $@
+
+mvndstpack_pkg.o: mvndstpack_pkg.f
+	$(F77) $(FFLAGS) -fPIC -c $< -o $@
+
+clean:
+	@rm -f mvndstpack_pkg.f mvndstpack_pkg.o

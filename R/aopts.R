@@ -1,31 +1,62 @@
-#' Autoregressive Ordinal Probit Model for Categorical Time series
+#' Autoregressive Ordinal Probit Model for Categorical Time Series
 #'
 #' Main entry point for fitting ordinal time–series models.
 #' Currently supports Conditional Least Squares Estimation (method = "clse"),
-#' using your compiled shared object that exposes CLSEW_aop_Rcall and gradient.
+#' using native routines registered in the package's shared library.
+#'
+#' @details
+#' This package compiles code in \code{src/} into a single shared library that
+#' R loads automatically. Native calls use \code{PACKAGE="aopts"}; you should
+#' not call \code{dyn.load()} or pass a \code{.so} path.
 #'
 #' @param y Integer or factor vector of length T (levels must be ordered);
 #'          mapped to 1..K internally.
 #' @param X Design matrix (T x p). Include an intercept column if you want one.
-#' @param method Estimation method. For now: "clse".
-#' @param so Path to compiled shared object (e.g., "CLSE.so").
-#' @param control List passed to \code{constrOptim} (e.g., list(reltol=1e-7,maxit=1000)).
+#' @param method Estimation method. For now: \code{"clse"}.
+#' @param control List passed to \code{constrOptim} (e.g., \code{list(reltol=1e-7,maxit=1000)}).
 #' @param optim_method Optimizer for \code{constrOptim} ("BFGS", "CG", ...).
 #' @param hessian Logical; compute Hessian (for SEs).
 #'
 #' @return An object of class \code{"aopts_fit"} with elements:
-#'   \itemize{
-#'     \item \code{method} – "clse"
-#'     \item \code{par} – estimated parameter vector
-#'     \item \code{se} – standard errors (if \code{hessian=TRUE} and invertible)
-#'     \item \code{K}, \code{T}, \code{p} – dimensions
-#'     \item \code{par_map} – list with decoded pieces: \code{cut}, \code{beta}, \code{rho}
-#'     \item \code{value}, \code{convergence}, \code{message} – optimizer outputs
-#'   }
+#' \itemize{
+#'   \item \code{method} – "clse"
+#'   \item \code{par} – estimated parameter vector
+#'   \item \code{se} – standard errors (if \code{hessian=TRUE} and invertible)
+#'   \item \code{K}, \code{T}, \code{p} – dimensions
+#'   \item \code{par_map} – list with decoded pieces: \code{cut}, \code{beta}, \code{rho}
+#'   \item \code{value}, \code{convergence}, \code{message} – optimizer outputs
+#' }
+#'
+#' @examples
+#' ## Example 1: Simulated ordinal time series with AR(1) latent correlation
+#' set.seed(1)
+#' T  <- 600
+#' K  <- 5
+#' t  <- 1:T
+#'
+#' # Design matrix: intercept + mild trend + ~30-day seasonality
+#' X <- cbind(
+#'   Intercept = 1,
+#'   Trend     = as.numeric(scale(t, scale = FALSE)),
+#'   c30       = cos(2*pi*t/30),
+#'   s30       = sin(2*pi*t/30)
+#' )
+#'
+#' cut_true   <- c(0.5, 1.2, 2.0)
+#' theta_true <- c(-0.5, 0.001, 0.30, -0.10)
+#' rho_true   <- 0.6
+#'
+#' sim <- aop_sim(
+#'   ci = cut_true, theta = theta_true, rho = rho_true,
+#'   K = K, Ts = T, DesignX = X, seed = 123
+#' )
+#'
+#' fit <- aopts(y = sim$X_hour, X = X, method = "clse")
+#' print(summary(fit))
+#'
 #' @export
 aopts <- function(y, X,
                   method = c("clse"),
-                  so = "CLSE.so",
                   control = list(reltol = 1e-7, maxit = 1000),
                   optim_method = "BFGS",
                   hessian = TRUE) {
@@ -52,9 +83,8 @@ aopts <- function(y, X,
   Xw <- matrix(0L, nrow = Tt, ncol = K)
   Xw[cbind(seq_len(Tt), y_mapped)] <- 1L
 
-  ## Dispatch
   if (method == "clse") {
-    fit <- fit_AopCLSW(y_mapped, Xw, X, so = so,
+    fit <- fit_AopCLSW(y_mapped, Xw, X,
                        control = control, method = optim_method,
                        myHessian = hessian)
   } else {
@@ -62,10 +92,7 @@ aopts <- function(y, X,
   }
 
   ## Decode parameter vector to named blocks
-  # Layout used by your native code:
-  #   par = (K-2) cutpoint diffs (with c1=0 convention),
-  #         p regression coefs (incl. intercept if present in X),
-  #         1 rho (AR(1))
+  # par layout: (K-2) cutpoint diffs (c1=0 convention), p betas, 1 rho
   p <- ncol(X)
   par <- fit$par
   stopifnot(length(par) == (K - 2L) + p + 1L)
@@ -77,7 +104,6 @@ aopts <- function(y, X,
 
   se <- rep(NA_real_, length(par))
   if (!is.null(fit$hessian) && is.matrix(fit$hessian) && hessian) {
-    ## more stable inverse for near-singular cases
     H <- (fit$hessian + t(fit$hessian)) / 2
     e <- try(chol2inv(chol(H)), silent = TRUE)
     if (inherits(e, "try-error")) {
@@ -106,8 +132,11 @@ aopts <- function(y, X,
   out
 }
 
-make_CLSEW_oracle <- function(Xl, Xw, DesignX, so = "CLSE.so") {
-  if (!is.loaded("CLSEW_aop_Rcall")) dyn.load(so)
+## --------------------- Native oracle & optimizer wrappers ---------------------
+
+make_CLSEW_oracle <- function(Xl, Xw, DesignX) {
+  # use the current package name dynamically
+  pkg <- utils::packageName() %||% "TSAOP"
 
   Xl <- as.integer(Xl)
   Xw <- matrix(as.integer(Xw), nrow = nrow(Xw), ncol = ncol(Xw))
@@ -118,26 +147,29 @@ make_CLSEW_oracle <- function(Xl, Xw, DesignX, so = "CLSE.so") {
   p  <- as.integer(ncol(DesignX))
   npar <- (K - 2L) + p + 1L
 
-  .C("read_dimensions", K, p, Ts, NAOK = TRUE)
-  .C("allocate", NAOK = TRUE)
-  .C("read_data",        Xl,                  NAOK = TRUE)
-  .C("read_data_matrix", as.integer(Xw),      NAOK = TRUE)
-  .C("read_covariates",  as.double(DesignX),  NAOK = TRUE)
+  .C("read_dimensions",  K, p, Ts, PACKAGE = pkg, NAOK = TRUE)
+  .C("allocate",                 PACKAGE = pkg, NAOK = TRUE)
+  .C("read_data",        Xl,     PACKAGE = pkg, NAOK = TRUE)
+  .C("read_data_matrix", as.integer(Xw), PACKAGE = pkg, NAOK = TRUE)
+  .C("read_covariates",  as.double(DesignX), PACKAGE = pkg, NAOK = TRUE)
 
   fn <- function(par) {
-    .C("CLSEW_aop_Rcall", as.double(par), out = double(1), NAOK = TRUE)$out
+    .C("CLSEW_aop_Rcall", as.double(par), out = double(1),
+       PACKAGE = pkg, NAOK = TRUE)$out
   }
   gr <- function(par) {
-    .C("gradient_CLSEW_aop", as.double(par), grad = double(npar), NAOK = TRUE)$grad
+    .C("gradient_CLSEW_aop", as.double(par), grad = double(npar),
+       PACKAGE = pkg, NAOK = TRUE)$grad
   }
   free <- function() {
-    .C("deallocate", NAOK = TRUE)
+    .C("deallocate", PACKAGE = pkg, NAOK = TRUE)
     invisible(NULL)
   }
   list(fn = fn, gr = gr, free = free, npar = npar, K = K, p = p, Ts = Ts)
 }
 
-fit_AopCLSW <- function(X_hour, X_hour_wide, DesignXEst, so,
+
+fit_AopCLSW <- function(X_hour, X_hour_wide, DesignXEst,
                         control = list(reltol = 1e-7, maxit = 1000),
                         method = "BFGS",
                         myHessian = FALSE) {
@@ -153,19 +185,19 @@ fit_AopCLSW <- function(X_hour, X_hour_wide, DesignXEst, so,
                    rep(0, NCOL(DesignXEst) - 1), phi_initial)
 
   if (K == 3) {
-    constrLSE = rbind(c(rep(0, length(par_initial)-1),  1),
-                      c(rep(0, length(par_initial)-1), -1)) # rho
+    constrLSE <- rbind(c(rep(0, length(par_initial)-1),  1),
+                       c(rep(0, length(par_initial)-1), -1)) # rho bounds
   } else {
     constrLSE <- matrix(0, nrow = K - 2, ncol = length(par_initial))
     constrLSE[1,1] <- 1
     for (ii in 2:(K-2)) constrLSE[ii, c(ii-1, ii)] <- c(-1, 1) # ci monotone
-    constrLSE = rbind(constrLSE,
-                      c(rep(0, ncol(constrLSE)-1),  1),
-                      c(rep(0, ncol(constrLSE)-1), -1)) # rho bounds
+    constrLSE <- rbind(constrLSE,
+                       c(rep(0, ncol(constrLSE)-1),  1),
+                       c(rep(0, ncol(constrLSE)-1), -1)) # rho bounds
   }
   constrLSE_ci <- c(rep(0, nrow(constrLSE) - 2), -1, -1)
 
-  oracle <- make_CLSEW_oracle(X_hour, X_hour_wide, DesignXEst, so = so)
+  oracle <- make_CLSEW_oracle(X_hour, X_hour_wide, DesignXEst)
   on.exit(oracle$free(), add = TRUE)
 
   res <- constrOptim(theta = par_initial,
@@ -191,7 +223,7 @@ fit_AopCLSW <- function(X_hour, X_hour_wide, DesignXEst, so,
   )
 }
 
-# ----- S3 helpers -------------------------------------------------------------
+## --------------------------- S3 helpers --------------------------------------
 
 #' @export
 coef.aopts_fit <- function(object, ...) {
@@ -238,7 +270,7 @@ print.summary.aopts_fit <- function(x, ...) {
   cat("aopts fit (method:", x$method, ")\n")
   cat("criterion value:", format(x$value, digits = 6), "\n")
   cat("convergence:", x$convergence, "\n")
-  if (nzchar(x$message)) cat("message:", x$message, "\n")
+  if (!is.null(x$message) && nzchar(x$message)) cat("message:", x$message, "\n")
   cat("\nCoefficients:\n")
   printCoefmat(x$table, na.print = "")
   invisible(x)
@@ -262,9 +294,7 @@ fitted.aopts_fit <- function(object, ...) {
 #' @export
 predict.aopts_fit <- function(object, newdata = NULL, type = c("prob"), ...) {
   type <- match.arg(type)
-  X <- if (is.null(newdata)) object$X else {
-    as.matrix(newdata)
-  }
+  X <- if (is.null(newdata)) object$X else as.matrix(newdata)
   .marginal_probs(object$par_map$cut, object$par_map$beta, X)
 }
 
