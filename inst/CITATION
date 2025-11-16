@@ -37,3 +37,19 @@ bibentry(
     year="2022",
     publisher="Wiley Online Library"
 )
+
+bibentry(
+  bibtype = "Article",
+  key     = "varin2006pairwise",
+  title   = "Pairwise likelihood inference for ordinal categorical time series",
+  author  = c(
+    person(given = "Cristiano", family = "Varin"),
+    person(given = "Paolo",     family = "Vidoni")
+  ),
+  journal = "Computational Statistics & Data Analysis",
+  year    = "2006",
+  volume  = "51",
+  number  = "4",
+  pages   = "2365--2373",
+  publisher = "Elsevier"
+)
