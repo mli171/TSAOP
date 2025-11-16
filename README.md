@@ -16,6 +16,7 @@ You can install the development version from Github:
 remotes::install_github("mli171/TSAOP", build_vignettes = FALSE, force = TRUE)
 ```
 
+## Model fitting example via simulated data
 ```{r}
 ## Example 1: Simulated ordinal time series with AR(1) latent correlation
 set.seed(1)
