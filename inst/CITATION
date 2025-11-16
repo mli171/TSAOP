@@ -1,0 +1,39 @@
+citHeader("To cite TSAOP and related methods, use:")
+
+bibentry(
+  bibtype = "Manual",
+  title   = "TSAOP: Autoregressive Ordinal Probit Models",
+  author  = person("Mo", "Li", role = c("aut","cre")),
+  year    = "2025",
+  note    = "R package version 0.1.0",
+  # url     = "https://CRAN.R-project.org/package=TSAOP"
+)
+
+bibentry(
+  bibtype = "Unpublished",
+  title   = "Conditional Least Squares Estimation for Autoregressive Ordered Probit Models",
+  author  = c(
+    person("Melissa", "Watts"),
+    person("Mo", "Li"),
+    person("Ya", "Su"),
+    person("QiQi", "Lu")
+  ),
+  year    = "2025",
+  note    = "Manuscript in preparation"
+)
+
+# Methods implemented (papers, not package authors):
+bibentry(
+  bibtype = "Article",
+    title= "Changepoint detection in autocorrelated ordinal categorical time series",
+    author= c(
+    person("Mo", "Li"),
+    person("QiQi", "Lu")
+    ),
+    journal="Environmetrics",
+    volume="33",
+    number="7",
+    pages="e2752",
+    year="2022",
+    publisher="Wiley Online Library"
+)
