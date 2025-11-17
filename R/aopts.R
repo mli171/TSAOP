@@ -6,7 +6,7 @@
 #'
 #' @details
 #' This package compiles code in \code{src/} into a single shared library that
-#' R loads automatically. Native calls use \code{PACKAGE="aopts"}; you should
+#' R loads automatically. Native calls use \code{PACKAGE="TSAOP"}; you should
 #' not call \code{dyn.load()} or pass a \code{.so} path.
 #'
 #' @param y Integer or factor vector of length T (levels must be ordered);

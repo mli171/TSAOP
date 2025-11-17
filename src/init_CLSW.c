@@ -21,7 +21,7 @@ static const R_CMethodDef CEntries[] = {
   {"read_data",          (DL_FUNC) &read_data,          1},
   {"read_data_matrix",   (DL_FUNC) &read_data_matrix,   1},
   {"read_covariates",    (DL_FUNC) &read_covariates,    1},
-  {"CLSEW_aop_Rcall",    (DL_FUNC) &CLSEW_aop_Rcall,    2},
+  {"CLSEW_aop_Rcall",    (DL_FUNC) &CLSEW_aop_Rcall,    5},
   {"gradient_CLSEW_aop", (DL_FUNC) &gradient_CLSEW_aop, 2},
   {NULL, NULL, 0}
 };

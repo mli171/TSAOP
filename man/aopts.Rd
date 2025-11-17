@@ -8,7 +8,7 @@ aopts(
   y,
   X,
   method = c("clse"),
-  control = list(reltol = 1e-07, maxit = 1000),
+  control = list(reltol = 0.0000001, maxit = 1000),
   optim_method = "BFGS",
   hessian = TRUE
 )
@@ -45,7 +45,7 @@ using native routines registered in the package's shared library.
 }
 \details{
 This package compiles code in \code{src/} into a single shared library that
-R loads automatically. Native calls use \code{PACKAGE="aopts"}; you should
+R loads automatically. Native calls use \code{PACKAGE="TSAOP"}; you should
 not call \code{dyn.load()} or pass a \code{.so} path.
 }
 \examples{
