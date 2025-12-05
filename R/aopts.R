@@ -153,14 +153,39 @@ make_CLSEW_oracle <- function(Xl, Xw, DesignX) {
   .C("read_data_matrix", as.integer(Xw), PACKAGE = pkg, NAOK = TRUE)
   .C("read_covariates",  as.double(DesignX), PACKAGE = pkg, NAOK = TRUE)
 
+  obj_call <- function(par, need_grad = 0L, need_hess = 0L, which_obj = 1L) {
+    .C("CLSEW_aop_Rcall",
+       par        = as.double(par),
+       out        = double(1L),
+       need_grad  = as.integer(need_grad),
+       need_hess  = as.integer(need_hess),
+       which_obj  = as.integer(which_obj),
+       PACKAGE    = pkg, NAOK = TRUE)
+  }
+
   fn <- function(par) {
-    .C("CLSEW_aop_Rcall", as.double(par), out = double(1),
-       PACKAGE = pkg, NAOK = TRUE)$out
+    obj_call(par, need_grad = 0L, need_hess = 0L, which_obj = 1L)$out
   }
+
+  ## If you prefer to get gradients via the same entry point:
   gr <- function(par) {
-    .C("gradient_CLSEW_aop", as.double(par), grad = double(npar),
-       PACKAGE = pkg, NAOK = TRUE)$grad
+    gg <- .C("gradient_CLSEW_aop",           # keep this if it exists…
+             as.double(par), grad = double(npar),
+             PACKAGE = pkg, NAOK = TRUE)$grad
+    ## Alternatively (if you don’t have gradient_CLSEW_aop):
+    # gg <- obj_call(par, need_grad = 1L, need_hess = 0L, which_obj = 1L)$grad
+    gg
   }
+
+  # fn <- function(par) {
+  #   .C("CLSEW_aop_Rcall", as.double(par), out = double(1),
+  #      PACKAGE = pkg, NAOK = TRUE)$out
+  # }
+  # gr <- function(par) {
+  #   .C("gradient_CLSEW_aop", as.double(par), grad = double(npar),
+  #      PACKAGE = pkg, NAOK = TRUE)$grad
+  # }
+
   free <- function() {
     .C("deallocate", PACKAGE = pkg, NAOK = TRUE)
     invisible(NULL)

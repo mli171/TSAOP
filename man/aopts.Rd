@@ -8,7 +8,7 @@ aopts(
   y,
   X,
   method = c("clse"),
-  control = list(reltol = 0.0000001, maxit = 1000),
+  control = list(reltol = 1e-07, maxit = 1000),
   optim_method = "BFGS",
   hessian = TRUE
 )
