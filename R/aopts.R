@@ -167,24 +167,12 @@ make_CLSEW_oracle <- function(Xl, Xw, DesignX) {
     obj_call(par, need_grad = 0L, need_hess = 0L, which_obj = 1L)$out
   }
 
-  ## If you prefer to get gradients via the same entry point:
   gr <- function(par) {
-    gg <- .C("gradient_CLSEW_aop",           # keep this if it exists…
+    gg <- .C("gradient_CLSEW_aop",
              as.double(par), grad = double(npar),
              PACKAGE = pkg, NAOK = TRUE)$grad
-    ## Alternatively (if you don’t have gradient_CLSEW_aop):
-    # gg <- obj_call(par, need_grad = 1L, need_hess = 0L, which_obj = 1L)$grad
     gg
   }
-
-  # fn <- function(par) {
-  #   .C("CLSEW_aop_Rcall", as.double(par), out = double(1),
-  #      PACKAGE = pkg, NAOK = TRUE)$out
-  # }
-  # gr <- function(par) {
-  #   .C("gradient_CLSEW_aop", as.double(par), grad = double(npar),
-  #      PACKAGE = pkg, NAOK = TRUE)$grad
-  # }
 
   free <- function() {
     .C("deallocate", PACKAGE = pkg, NAOK = TRUE)
