@@ -9,44 +9,84 @@ aopts(
   X,
   method = c("clse"),
   control = list(reltol = 1e-07, maxit = 1000),
-  optim_method = "BFGS",
-  hessian = TRUE
+  optim_method = "BFGS"
 )
 }
 \arguments{
-\item{y}{Integer or factor vector of length T (levels must be ordered);
-mapped to 1..K internally.}
+\item{y}{Integer or factor vector of length \eqn{T}. If a factor, levels must
+be ordered. Internally, values are mapped to \code{1, ..., K}.}
 
-\item{X}{Design matrix (T x p). Include an intercept column if you want one.}
+\item{X}{Design matrix of dimension \eqn{T \times p}. Include an intercept
+column if desired.}
 
-\item{method}{Estimation method. For now: \code{"clse"}.}
+\item{method}{Estimation method. Currently only \code{"clse"} is supported.
+Planned options include \code{"pmle"} and \code{"lse"} (TBA).}
 
-\item{control}{List passed to \code{constrOptim} (e.g., \code{list(reltol=1e-7,maxit=1000)}).}
+\item{control}{List of control arguments passed to \code{\link[stats]{constrOptim}}
+(e.g., \code{list(reltol = 1e-7, maxit = 1000)}).}
 
-\item{optim_method}{Optimizer for \code{constrOptim} ("BFGS", "CG", ...).}
-
-\item{hessian}{Logical; compute Hessian (for SEs).}
+\item{optim_method}{Optimization method passed to \code{\link[stats]{constrOptim}}
+(e.g., \code{"BFGS"}, \code{"CG"}).}
 }
 \value{
-An object of class \code{"aopts_fit"} with elements:
+An object of class \code{"aopts_fit"} with components:
 \itemize{
-\item \code{method} – "clse"
-\item \code{par} – estimated parameter vector
-\item \code{se} – standard errors (if \code{hessian=TRUE} and invertible)
-\item \code{K}, \code{T}, \code{p} – dimensions
-\item \code{par_map} – list with decoded pieces: \code{cut}, \code{beta}, \code{rho}
-\item \code{value}, \code{convergence}, \code{message} – optimizer outputs
+\item \code{method}: Estimation method used.
+\item \code{par}: Estimated parameter vector.
+\item \code{se}: Standard errors. For \code{"clse"}, these are based on the
+sandwich variance when available, otherwise a Hessian-based fallback.
+For planned methods, this is \emph{TBA}.
+\item \code{vcov_sand}: Sandwich variance-covariance matrix for
+\code{"clse"} (or \code{NULL}/\code{NA} if unavailable). For planned
+methods, this is \emph{TBA}.
+\item \code{K}, \code{T}, \code{p}: Model dimensions.
+\item \code{par_map}: Decoded parameter blocks: \code{cut}, \code{beta},
+\code{rho}.
+\item \code{value}, \code{convergence}, \code{message}: Optimizer outputs.
 }
 }
 \description{
-Main entry point for fitting ordinal time–series models.
-Currently supports Conditional Least Squares Estimation (method = "clse"),
-using native routines registered in the package's shared library.
+Main entry point for fitting autoregressive ordinal probit models for
+categorical time series.
 }
 \details{
-This package compiles code in \code{src/} into a single shared library that
-R loads automatically. Native calls use \code{PACKAGE="TSAOP"}; you should
-not call \code{dyn.load()} or pass a \code{.so} path.
+Currently supports Conditional Least Squares Estimation (method = "clse"),
+implemented via native routines registered in the package shared library.
+Additional methods are planned (TBA).
+
+The package compiles the C/C++ source in \code{src/} into a single shared
+library that R loads automatically. Native calls are made with
+\code{PACKAGE="TSAOP"} and require that the corresponding routines are
+registered (see \code{useDynLib(TSAOP, .registration=TRUE)} in the
+\code{NAMESPACE} file). Users should not call \code{dyn.load()} or pass a
+\code{.so} path directly.
+
+\strong{Implemented / planned methods.}
+\itemize{
+\item \code{"clse"} (Conditional Least Squares; implemented).
+\itemize{
+\item \emph{Parameter estimation:} Parameters are estimated by minimizing
+the CLS objective via \code{\link[stats]{constrOptim}} subject to
+monotonicity constraints on cutpoints and bounds on \code{rho}.
+\item \emph{Standard error approximation:} Robust (sandwich) variance
+estimator when available:
+\deqn{V = H^{-1} W H^{-1},}
+where \eqn{H} is the Hessian of the CLS objective and \eqn{W} is the outer
+product of per-time score contributions returned by the native routine
+\code{score_by_t_CLSEW_aop}. If the robust variance cannot be computed,
+a Hessian-based fallback is used when possible.
+}
+\item \code{"pmle"} (Pairwise maximum/composite log-likelihood; \emph{TBA}).
+\itemize{
+\item \emph{Parameter estimation:} TBA.
+\item \emph{Standard error approximation:} TBA.
+}
+\item \code{"lse"} (Least squares estimator; \emph{TBA}).
+\itemize{
+\item \emph{Parameter estimation:} TBA.
+\item \emph{Standard error approximation:} TBA.
+}
+}
 }
 \examples{
 ## Example 1: Simulated ordinal time series with AR(1) latent correlation

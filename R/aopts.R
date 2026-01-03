@@ -1,30 +1,72 @@
 #' Autoregressive Ordinal Probit Model for Categorical Time Series
 #'
-#' Main entry point for fitting ordinal time–series models.
+#' Main entry point for fitting autoregressive ordinal probit models for
+#' categorical time series.
+#'
 #' Currently supports Conditional Least Squares Estimation (method = "clse"),
-#' using native routines registered in the package's shared library.
+#' implemented via native routines registered in the package shared library.
+#' Additional methods are planned (TBA).
 #'
 #' @details
-#' This package compiles code in \code{src/} into a single shared library that
-#' R loads automatically. Native calls use \code{PACKAGE="TSAOP"}; you should
-#' not call \code{dyn.load()} or pass a \code{.so} path.
+#' The package compiles the C/C++ source in \code{src/} into a single shared
+#' library that R loads automatically. Native calls are made with
+#' \code{PACKAGE="TSAOP"} and require that the corresponding routines are
+#' registered (see \code{useDynLib(TSAOP, .registration=TRUE)} in the
+#' \code{NAMESPACE} file). Users should not call \code{dyn.load()} or pass a
+#' \code{.so} path directly.
 #'
-#' @param y Integer or factor vector of length T (levels must be ordered);
-#'          mapped to 1..K internally.
-#' @param X Design matrix (T x p). Include an intercept column if you want one.
-#' @param method Estimation method. For now: \code{"clse"}.
-#' @param control List passed to \code{constrOptim} (e.g., \code{list(reltol=1e-7,maxit=1000)}).
-#' @param optim_method Optimizer for \code{constrOptim} ("BFGS", "CG", ...).
-#' @param hessian Logical; compute Hessian (for SEs).
-#'
-#' @return An object of class \code{"aopts_fit"} with elements:
+#' \strong{Implemented / planned methods.}
 #' \itemize{
-#'   \item \code{method} – "clse"
-#'   \item \code{par} – estimated parameter vector
-#'   \item \code{se} – standard errors (if \code{hessian=TRUE} and invertible)
-#'   \item \code{K}, \code{T}, \code{p} – dimensions
-#'   \item \code{par_map} – list with decoded pieces: \code{cut}, \code{beta}, \code{rho}
-#'   \item \code{value}, \code{convergence}, \code{message} – optimizer outputs
+#'   \item \code{"clse"} (Conditional Least Squares; implemented).
+#'   \itemize{
+#'     \item \emph{Parameter estimation:} Parameters are estimated by minimizing
+#'     the CLS objective via \code{\link[stats]{constrOptim}} subject to
+#'     monotonicity constraints on cutpoints and bounds on \code{rho}.
+#'     \item \emph{Standard error approximation:} Robust (sandwich) variance
+#'     estimator when available:
+#'     \deqn{V = H^{-1} W H^{-1},}
+#'     where \eqn{H} is the Hessian of the CLS objective and \eqn{W} is the outer
+#'     product of per-time score contributions returned by the native routine
+#'     \code{score_by_t_CLSEW_aop}. If the robust variance cannot be computed,
+#'     a Hessian-based fallback is used when possible.
+#'   }
+#'   \item \code{"pmle"} (Pairwise maximum/composite log-likelihood; \emph{TBA}).
+#'   \itemize{
+#'     \item \emph{Parameter estimation:} TBA.
+#'     \item \emph{Standard error approximation:} TBA.
+#'   }
+#'   \item \code{"lse"} (Least squares estimator; \emph{TBA}).
+#'   \itemize{
+#'     \item \emph{Parameter estimation:} TBA.
+#'     \item \emph{Standard error approximation:} TBA.
+#'   }
+#' }
+#'
+#' @param y Integer or factor vector of length \eqn{T}. If a factor, levels must
+#'   be ordered. Internally, values are mapped to \code{1, ..., K}.
+#' @param X Design matrix of dimension \eqn{T \times p}. Include an intercept
+#'   column if desired.
+#' @param method Estimation method. Currently only \code{"clse"} is supported.
+#'   Planned options include \code{"pmle"} and \code{"lse"} (TBA).
+#' @param control List of control arguments passed to \code{\link[stats]{constrOptim}}
+#'   (e.g., \code{list(reltol = 1e-7, maxit = 1000)}).
+#' @param optim_method Optimization method passed to \code{\link[stats]{constrOptim}}
+#'   (e.g., \code{"BFGS"}, \code{"CG"}).
+#'
+#' @return An object of class \code{"aopts_fit"} with components:
+#' \itemize{
+#'   \item \code{method}: Estimation method used.
+#'   \item \code{par}: Estimated parameter vector.
+#'   \item \code{se}: Standard errors. For \code{"clse"}, these are based on the
+#'     sandwich variance when available, otherwise a Hessian-based fallback.
+#'     For planned methods, this is \emph{TBA}.
+#'   \item \code{vcov_sand}: Sandwich variance-covariance matrix for
+#'     \code{"clse"} (or \code{NULL}/\code{NA} if unavailable). For planned
+#'     methods, this is \emph{TBA}.
+#'   \item \code{K}, \code{T}, \code{p}: Model dimensions.
+#'   \item \code{par_map}: Decoded parameter blocks: \code{cut}, \code{beta},
+#'     \code{rho}.
+#'   \item \code{value}, \code{convergence}, \code{message}: Optimizer outputs.
 #' }
 #'
 #' @examples
@@ -58,8 +100,7 @@
 aopts <- function(y, X,
                   method = c("clse"),
                   control = list(reltol = 1e-7, maxit = 1000),
-                  optim_method = "BFGS",
-                  hessian = TRUE) {
+                  optim_method = "BFGS") {
 
   method <- match.arg(method, c("clse"))
 
@@ -83,18 +124,33 @@ aopts <- function(y, X,
   Xw <- matrix(0L, nrow = Tt, ncol = K)
   Xw[cbind(seq_len(Tt), y_mapped)] <- 1L
 
+  ## Fit + SE logic by method (so future methods can plug in cleanly)
   if (method == "clse") {
+
     fit <- fit_AopCLSW(y_mapped, Xw, X,
-                       control = control, method = optim_method,
-                       myHessian = hessian)
+                       control = control,
+                       method  = optim_method)
+
+    par <- fit$par
+
+    ## SE for CLSE: prefer sandwich; fallback to Hessian-based
+    se <- rep(NA_real_, length(par))
+    if (!is.null(fit$vcov_sand) && is.matrix(fit$vcov_sand) &&
+        all(dim(fit$vcov_sand) == length(par))) {
+      se <- sqrt(pmax(diag(fit$vcov_sand), 0))
+    } else if (!is.null(fit$hessian) && is.matrix(fit$hessian)) {
+      H <- (fit$hessian + t(fit$hessian)) / 2
+      e <- try(chol2inv(chol(H)), silent = TRUE)
+      if (inherits(e, "try-error")) e <- try(solve(H), silent = TRUE)
+      if (!inherits(e, "try-error")) se <- sqrt(pmax(diag(e), 0))
+    }
+
   } else {
     stop("Unsupported method.")
   }
 
   ## Decode parameter vector to named blocks
-  # par layout: (K-2) cutpoint diffs (c1=0 convention), p betas, 1 rho
   p <- ncol(X)
-  par <- fit$par
   stopifnot(length(par) == (K - 2L) + p + 1L)
 
   cut_diff <- if (K >= 3) par[seq_len(K - 2L)] else numeric(0)
@@ -102,20 +158,11 @@ aopts <- function(y, X,
   beta <- par[(K - 1L):(K - 1L + p - 1L)]
   rho  <- par[length(par)]
 
-  se <- rep(NA_real_, length(par))
-  if (!is.null(fit$hessian) && is.matrix(fit$hessian) && hessian) {
-    H <- (fit$hessian + t(fit$hessian)) / 2
-    e <- try(chol2inv(chol(H)), silent = TRUE)
-    if (inherits(e, "try-error")) {
-      e <- try(solve(H + 1e-8 * diag(nrow(H))), silent = TRUE)
-    }
-    if (!inherits(e, "try-error")) se <- sqrt(pmax(diag(e), 0))
-  }
-
   out <- list(
     method      = method,
     par         = par,
     se          = se,
+    vcov_sand   = fit$vcov_sand,
     par_map     = list(cut = cut, beta = beta, rho = rho),
     value       = fit$value,
     convergence = fit$convergence,
@@ -131,6 +178,7 @@ aopts <- function(y, X,
   class(out) <- "aopts_fit"
   out
 }
+
 
 ## --------------------- Native oracle & optimizer wrappers ---------------------
 
@@ -169,23 +217,32 @@ make_CLSEW_oracle <- function(Xl, Xw, DesignX) {
 
   gr <- function(par) {
     gg <- .C("gradient_CLSEW_aop",
-             as.double(par), grad = double(npar),
-             PACKAGE = pkg, NAOK = TRUE)$grad
+             as.double(par),
+             grad = double(npar),
+             PACKAGE = pkg,
+             NAOK = TRUE)$grad
     gg
   }
-
+  score_by_t <- function(par) {
+    out <- .C("score_by_t_CLSEW_aop",
+              as.double(par),
+              scores = double(Ts * npar),
+              PACKAGE = pkg,
+              NAOK = TRUE)$scores
+    matrix(out, nrow = Ts, ncol = npar)
+  }
   free <- function() {
     .C("deallocate", PACKAGE = pkg, NAOK = TRUE)
     invisible(NULL)
   }
-  list(fn = fn, gr = gr, free = free, npar = npar, K = K, p = p, Ts = Ts)
+  list(fn = fn, gr = gr, score_by_t = score_by_t,
+       free = free, npar = npar, K = K, p = p, Ts = Ts)
 }
 
 
 fit_AopCLSW <- function(X_hour, X_hour_wide, DesignXEst,
                         control = list(reltol = 1e-7, maxit = 1000),
-                        method = "BFGS",
-                        myHessian = FALSE) {
+                        method = "BFGS") {
   stopifnot(is.matrix(X_hour_wide), nrow(X_hour_wide) == length(X_hour))
   stopifnot(is.matrix(DesignXEst),  nrow(DesignXEst)  == length(X_hour))
 
@@ -216,11 +273,24 @@ fit_AopCLSW <- function(X_hour, X_hour_wide, DesignXEst,
   res <- constrOptim(theta = par_initial,
                      f       = oracle$fn,
                      grad    = oracle$gr,
-                     hessian = myHessian,
+                     hessian = TRUE,
                      ui      = constrLSE,
                      ci      = constrLSE_ci,
                      control = control,
                      method  = method)
+
+  Htilde <- (res$hessian + t(res$hessian)) / 2
+  score_mat <- oracle$score_by_t(res$par)
+
+  sandwich_vcov <- tryCatch({
+    Hinv <- tryCatch(chol2inv(chol(Htilde)), error = function(e) solve(Htilde))
+    Wtilde <- crossprod(score_mat)     # sum_t s_t s_t'
+    V <- Hinv %*% Wtilde %*% Hinv
+    (V + t(V)) / 2
+  }, error = function(e) {
+    matrix(NA_real_, length(res$par), length(res$par))
+  })
+
 
   list(
     par_init    = par_initial,
@@ -228,6 +298,7 @@ fit_AopCLSW <- function(X_hour, X_hour_wide, DesignXEst,
     value       = res$value,
     counts      = res$counts,
     hessian     = res$hessian,
+    vcov_sand   = sandwich_vcov,
     convergence = res$convergence,
     message     = res$message,
     K           = K,
@@ -253,6 +324,11 @@ coef.aopts_fit <- function(object, ...) {
 
 #' @export
 vcov.aopts_fit <- function(object, ...) {
+  if (!is.null(object$vcov_sand) && is.matrix(object$vcov_sand)) {
+    V <- object$vcov_sand
+    dimnames(V) <- list(names(coef(object)), names(coef(object)))
+    return(V)
+  }
   if (is.null(object$se) || all(is.na(object$se))) return(NA_real_)
   s <- object$se
   V <- diag(s^2)

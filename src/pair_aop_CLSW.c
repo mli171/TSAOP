@@ -37,6 +37,7 @@ static void   trans_prob_aop(const int position_t, const int k, double *result);
 void         gradient_CLSEW_aop(const double *param, double *gradient);
 static void  gradient_CLSEW_aop_single(const double *param);
 void         gradient_CLSEW_pair_aop(const int position1, const int position2, double *gradient_this_pair);
+void         score_by_t_CLSEW_aop(const double *param, double *scores);
 
 /* bivariate standard normal pdf (no integration) — forward decl */
 static double mydnorm2(const double x1, const double x2, const double rho);
@@ -587,4 +588,71 @@ static double mydnorm2(const double x1,
                        const double rho)
 {
   return Inv_TwoPiOne_Rho2 * exp(-0.5 * (x1*x1 + x2*x2 - 2.0*rho*x1*x2) / One_Rho2);
+}
+
+/* Exported: per-time score contributions s_t(θ) for t = 1..T
+ scores is length Dim.num_time * Dim.num_param, column-major:
+ scores[t + i*Dim.num_time] = s_t,i(θ)
+ */
+void score_by_t_CLSEW_aop(const double *param,
+                          double *scores)
+{
+  int i, t;
+
+  /* 1) Read parameters */
+  read_parameters(param);
+
+  /* 2) Precompute rho helpers (same as gradient_CLSEW_aop) */
+  One_Rho2          = 1.0 - Param.phi*Param.phi;
+  if (One_Rho2 < 1e-15) One_Rho2 = 1e-15;
+  sqrt_One_Rho2     = sqrt(One_Rho2);
+  Inv_TwoPiOne_Rho2 = 1.0 / (M_2PI * sqrt_One_Rho2);
+
+  /* 3) Compute means and bounds, same as in gradient_CLSEW_aop */
+  for (t = 0; t < Dim.num_time; ++t) {
+    means[t]          = 0.0;
+    Ct_Mut[t]         = 0.0;
+    Ctm1_Mut[t]       = 0.0;
+    density_Ct_Mut[t] = 0.0;
+    density_Ctm1_Mut[t]= 0.0;
+  }
+
+  for (t = 0; t < Dim.num_time; ++t) {
+    for (i = 0; i < Dim.num_regr; ++i)
+      means[t] += Param.beta[i] * design_matrix[t][i];
+
+    if (data[t] == 1) {
+      Ct_Mut[t]   = Param.tau[data[t]-1] - means[t];
+      Ctm1_Mut[t] = -BIG;
+    } else if (data[t] < Dim.num_categ && data[t] > 1) {
+      Ct_Mut[t]   = Param.tau[data[t]-1] - means[t];
+      Ctm1_Mut[t] = Param.tau[data[t]-2] - means[t];
+    } else if (data[t] == Dim.num_categ) {
+      Ct_Mut[t]   = BIG;
+      Ctm1_Mut[t] = Param.tau[data[t]-2] - means[t];
+    }
+
+    density_Ct_Mut[t]   = dnorm(Ct_Mut[t],   0.0, 1.0, 0);
+    density_Ctm1_Mut[t] = dnorm(Ctm1_Mut[t], 0.0, 1.0, 0);
+  }
+
+  /* 4) t = 1 (marginal term) -> current_index_g = -1 */
+  current_index_g = -1;
+  gradient_CLSEW_aop_single(param);  /* fills gradient_single */
+
+  for (i = 0; i < Dim.num_param; ++i) {
+    /* s_1,i = -2 * gradient_single[i] */
+    scores[0 + i * Dim.num_time] = -2.0 * gradient_single[i];
+  }
+
+  /* 5) t = 2..T (conditional terms) */
+  for (t = 0; t < Dim.num_time - 1; ++t) {
+    current_index_g = t;             /* this means current time = t+1 */
+  gradient_CLSEW_aop_single(param);
+
+  int row = t + 1;                 /* t=0 -> row=1 corresponds to time 2 */
+  for (i = 0; i < Dim.num_param; ++i) {
+    scores[row + i * Dim.num_time] = -2.0 * gradient_single[i];
+  }
+  }
 }

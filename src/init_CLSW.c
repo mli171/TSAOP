@@ -12,17 +12,19 @@ void read_data_matrix(int *Xw);
 void read_covariates(double *DesignX);
 void CLSEW_aop_Rcall(double *par, double *out);
 void gradient_CLSEW_aop(double *par, double *grad);
+void score_by_t_CLSEW_aop(double *par, double *scores);
 
 /* ---- register .C routines ---- */
 static const R_CMethodDef CEntries[] = {
-  {"read_dimensions",    (DL_FUNC) &read_dimensions,    3},
-  {"allocate",           (DL_FUNC) &allocate,           0},
-  {"deallocate",         (DL_FUNC) &deallocate,         0},
-  {"read_data",          (DL_FUNC) &read_data,          1},
-  {"read_data_matrix",   (DL_FUNC) &read_data_matrix,   1},
-  {"read_covariates",    (DL_FUNC) &read_covariates,    1},
-  {"CLSEW_aop_Rcall",    (DL_FUNC) &CLSEW_aop_Rcall,    5},
-  {"gradient_CLSEW_aop", (DL_FUNC) &gradient_CLSEW_aop, 2},
+  {"read_dimensions",      (DL_FUNC) &read_dimensions,    3},
+  {"allocate",             (DL_FUNC) &allocate,           0},
+  {"deallocate",           (DL_FUNC) &deallocate,         0},
+  {"read_data",            (DL_FUNC) &read_data,          1},
+  {"read_data_matrix",     (DL_FUNC) &read_data_matrix,   1},
+  {"read_covariates",      (DL_FUNC) &read_covariates,    1},
+  {"CLSEW_aop_Rcall",      (DL_FUNC) &CLSEW_aop_Rcall,    5},
+  {"gradient_CLSEW_aop",   (DL_FUNC) &gradient_CLSEW_aop, 2},
+  {"score_by_t_CLSEW_aop", (DL_FUNC) &score_by_t_CLSEW_aop, 2},
   {NULL, NULL, 0}
 };
 
