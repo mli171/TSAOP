@@ -1,4 +1,4 @@
-# TSAOP: Autoregressive Ordinal Probit Model for Categorical Time series
+# TSAOP: Autoregressive Ordinal Probit Model for Ordinal Categorical Time series
 
 ## Overview
 
