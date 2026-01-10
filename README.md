@@ -3,7 +3,7 @@
 ## Overview
 
 Autoregressive ordinal probit model fitting for ordinal time series data. Currently, 
-the only available method is the conditional least square estimator from 
+the only available method is the conditional least square with lag 1 estimator from 
 Watts et al. (2025) for AR(1) latent process. The sequential least square 
 estimator (Li and Lu, 2022) and maximum pairwise likelihood estimator 
 (Varin & Vidoni, 2006) will be added soon.
@@ -48,7 +48,7 @@ print(summary(fit))
 
 ## References
 
-[1] Watts, M., Li, M., Su, Y., & Lu, Q. (2025). *Conditional least squares estimation for autoregressive ordered probit models*. Manuscript in preparation.
+[1] Watts, M., Li, M., Su, Y., & Lu, Q. (2026). *Conditional least squares estimation for autoregressive ordered probit models*. Manuscript in preparation.
 
 [2] Li, M., & Lu, Q. (2022). *Changepoint detection in autocorrelated ordinal categorical time series*. *Environmetrics, 33*(7), e2752.
 
