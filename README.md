@@ -56,7 +56,7 @@ print(summary(fit_pl))
 
 ### Example 2: Simulated ordinal time series with AR(2) latent correlation
 
-Currently only the maximize pairwise log-likelihood ('pl') method is supported.
+Maximize pairwise log-likelihood ('pl') method is supported.
 
 ```{r}
 T <- 600
