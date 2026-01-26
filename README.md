@@ -3,10 +3,9 @@
 ## Overview
 
 Autoregressive ordinal probit model fitting for ordinal time series data. Currently, 
-the only available method is the conditional least square with lag 1 estimator from 
-Watts et al. (2025) for AR(1) latent process. The sequential least square 
-estimator (Li and Lu, 2022) and maximum pairwise likelihood estimator 
-(Varin & Vidoni, 2006) will be added soon.
+the only available methods are the conditional least square with lag 1 estimator from 
+Watts et al. (2025) for AR(1) latent process, and the maximum pairwise log-likelihood estimator 
+from Varin & Vidoni (2006). The sequential least square estimator (Li and Lu, 2022) will be added soon.
 
 ## Installation
 You can install the development version from Github:
