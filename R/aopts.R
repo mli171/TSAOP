@@ -133,6 +133,11 @@
 #'   control = list(order_pair_lik = 5L, ar_order = 2L))
 #' print(summary(fit_pl))
 #'
+#' @references
+#' Varin, C. and Vidoni, P. (2006).
+#' \emph{Pairwise likelihood inference for ordinal categorical time series}.
+#' \emph{Computational Statistics \& Data Analysis} \bold{51}(4), 2365--2373.
+#'
 #' @export
 aopts <- function(y, X,
                   method = c("clse", "pl"),
