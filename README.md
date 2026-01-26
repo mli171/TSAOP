@@ -8,6 +8,9 @@ Supported methods:
 
 - Conditional least square with lag 1 estimator for AR(1) latent process (Watts et al., 2025);
 - Maximum pairwise log-likelihood estimator (Varin & Vidoni, 2006); 
+
+To be added soon:
+
 - The sequential least square estimator will be added soon (Li and Lu, 2022);
 
 ## Installation
