@@ -10,7 +10,7 @@ Authors@R: c(
     )
   )
 Description: Autoregressive ordinal probit model fitting for ordinal time series data.
-Imports: stats
+Imports: stats, utils
 LinkingTo: Rcpp, RcppArmadillo
 License: file LICENSE
 Roxygen: list(markdown = TRUE)

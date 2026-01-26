@@ -2,9 +2,20 @@
 % Please edit documentation in R/aop_sim.R
 \name{aop_sim}
 \alias{aop_sim}
-\title{Simulate ordinal time series under AR(1) probit-threshold model}
+\title{Simulate ordinal time series under AR(p) probit-threshold model}
 \usage{
-aop_sim(ci, theta, rho, K, Ts, DesignX, seed = NULL)
+aop_sim(
+  ci,
+  theta,
+  rho,
+  K,
+  Ts,
+  DesignX,
+  seed = NULL,
+  burnin = NULL,
+  psi_trunc = 5000L,
+  tol = 1e-10
+)
 }
 \arguments{
 \item{ci}{Numeric vector of cutpoints. Either:
@@ -15,7 +26,11 @@ aop_sim(ci, theta, rho, K, Ts, DesignX, seed = NULL)
 
 \item{theta}{numeric, length ncol(DesignX); regression coefficients}
 
-\item{rho}{AR(1) coefficient in (-1, 1)}
+\item{rho}{Numeric. Either:
+\itemize{
+\item scalar: AR(1) coefficient in (-1, 1)
+\item vector: AR(p) coefficients \eqn{(\phi_1,\ldots,\phi_p)}
+}}
 
 \item{K}{number of categories}
 
@@ -24,10 +39,32 @@ aop_sim(ci, theta, rho, K, Ts, DesignX, seed = NULL)
 \item{DesignX}{T x p design matrix (include intercept if desired)}
 
 \item{seed}{optional integer for reproducibility}
+
+\item{burnin}{integer burn-in length for AR(p) initialization (default chosen from p)}
+
+\item{psi_trunc}{truncation length for MA(\eqn{\infty}) weights used to scale innovations}
+
+\item{tol}{tolerance for truncation / numerical safety}
 }
 \value{
 list with latent Z, integer y in 1..K, and one-hot matrix Yw (T x K)
 }
 \description{
-Simulate ordinal time series under AR(1) probit-threshold model
+Simulate ordinal time series under AR(p) probit-threshold model
+}
+\examples{
+## AR(2) simulation + fit CLSEW and PL (requires compiled native code)
+set.seed(1)
+T  <- 400
+K  <- 5
+t  <- 1:T
+X <- cbind(Intercept = 1, Trend = as.numeric(scale(t, scale = FALSE)))
+
+cut_true   <- c(0.5, 1.2, 2.0)     # K-2 interior cutpoints with c1=0 convention
+theta_true <- c(-0.4, 0.002)
+phi_true   <- c(0.6, -0.15)        # AR(2)
+
+sim <- aop_sim(ci = cut_true, theta = theta_true, rho = phi_true,
+               K = K, Ts = T, DesignX = X, seed = 123)
+
 }

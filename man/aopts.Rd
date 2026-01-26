@@ -7,7 +7,7 @@
 aopts(
   y,
   X,
-  method = c("clse"),
+  method = c("clse", "pl"),
   control = list(reltol = 1e-07, maxit = 1000),
   optim_method = "BFGS"
 )
@@ -19,13 +19,15 @@ be ordered. Internally, values are mapped to \code{1, ..., K}.}
 \item{X}{Design matrix of dimension \eqn{T \times p}. Include an intercept
 column if desired.}
 
-\item{method}{Estimation method. Currently only \code{"clse"} is supported.
-Planned options include \code{"pmle"} and \code{"lse"} (TBA).}
+\item{method}{Estimation method. Supported: \code{"clse"} and \code{"pl"}.}
 
-\item{control}{List of control arguments passed to \code{\link[stats]{constrOptim}}
-(e.g., \code{list(reltol = 1e-7, maxit = 1000)}).}
+\item{control}{List of control arguments passed to the optimizer.
+For \code{"clse"}, this is passed to \code{\link[stats]{constrOptim}}.
+For \code{"pl"}, this is passed to \code{\link[stats]{optim}} (with
+method-specific entries such as \code{order_pair_lik} and \code{ar_order}
+handled internally and not forwarded to \code{optim}).}
 
-\item{optim_method}{Optimization method passed to \code{\link[stats]{constrOptim}}
+\item{optim_method}{Optimization method passed to the optimizer
 (e.g., \code{"BFGS"}, \code{"CG"}).}
 }
 \value{
@@ -34,11 +36,11 @@ An object of class \code{"aopts_fit"} with components:
 \item \code{method}: Estimation method used.
 \item \code{par}: Estimated parameter vector.
 \item \code{se}: Standard errors. For \code{"clse"}, these are based on the
-sandwich variance when available, otherwise a Hessian-based fallback.
-For planned methods, this is \emph{TBA}.
-\item \code{vcov_sand}: Sandwich variance-covariance matrix for
-\code{"clse"} (or \code{NULL}/\code{NA} if unavailable). For planned
-methods, this is \emph{TBA}.
+sandwich variance \eqn{V = H^{-1} W H^{-1}} when available. For \code{"pl"},
+these are based on the Godambe/sandwich variance when available; otherwise
+\code{NA}.
+\item \code{vcov_sand}: Robust sandwich (Godambe) variance-covariance matrix
+when available; otherwise \code{NULL} or an \code{NA} matrix.
 \item \code{K}, \code{T}, \code{p}: Model dimensions.
 \item \code{par_map}: Decoded parameter blocks: \code{cut}, \code{beta},
 \code{rho}.
@@ -50,9 +52,9 @@ Main entry point for fitting autoregressive ordinal probit models for
 categorical time series.
 }
 \details{
-Currently supports Conditional Least Squares Estimation (method = "clse"),
-implemented via native routines registered in the package shared library.
-Additional methods are planned (TBA).
+Currently supports Conditional Least Squares Estimation (method = "clse")
+and Maximum Pairwise (Composite) Log-Likelihood (method = "pl"), implemented
+via native routines registered in the package shared library.
 
 The package compiles the C/C++ source in \code{src/} into a single shared
 library that R loads automatically. Native calls are made with
@@ -69,28 +71,33 @@ registered (see \code{useDynLib(TSAOP, .registration=TRUE)} in the
 the CLS objective via \code{\link[stats]{constrOptim}} subject to
 monotonicity constraints on cutpoints and bounds on \code{rho}.
 \item \emph{Standard error approximation:} Robust (sandwich) variance
-estimator when available:
+estimator:
 \deqn{V = H^{-1} W H^{-1},}
-where \eqn{H} is the Hessian of the CLS objective and \eqn{W} is the outer
-product of per-time score contributions returned by the native routine
-\code{score_by_t_CLSEW_aop}. If the robust variance cannot be computed,
-a Hessian-based fallback is used when possible.
+where \eqn{H} is the Hessian of the CLS objective and \eqn{W} is the
+variability matrix returned by the native routine
+\code{score_by_t_CLSEW_aop}. (Despite its name, this routine returns the
+aggregated \eqn{W} matrix rather than a per-time score matrix.)
 }
-\item \code{"pmle"} (Pairwise maximum/composite log-likelihood; \emph{TBA}).
+\item \code{"pl"} (Maximum pairwise log-likelihood; implemented).
 \itemize{
-\item \emph{Parameter estimation:} TBA.
-\item \emph{Standard error approximation:} TBA.
+\item \emph{Parameter estimation:} Parameters are estimated by maximizing
+the (average) pairwise/composite log-likelihood using
+\code{\link[stats]{optim}} on an unconstrained transformed parameterization
+(cutpoint differences and AR parameters transformed to enforce constraints).
+\item \emph{Standard error approximation:} When available, a robust
+Godambe/sandwich variance estimator of the form
+\deqn{V = H^{-1} J H^{-1}}
+is returned in \code{vcov_sand}, where \eqn{H} is the Hessian (in the
+original parameterization) and \eqn{J} is a variability matrix constructed
+from composite-score contributions. If unavailable, standard errors are
+returned as \code{NA}.
 }
 \item \code{"lse"} (Least squares estimator; \emph{TBA}).
-\itemize{
-\item \emph{Parameter estimation:} TBA.
-\item \emph{Standard error approximation:} TBA.
-}
 }
 }
 \examples{
 ## Example 1: Simulated ordinal time series with AR(1) latent correlation
-set.seed(1)
+
 T  <- 600
 K  <- 5
 t  <- 1:T
@@ -112,7 +119,38 @@ sim <- aop_sim(
   K = K, Ts = T, DesignX = X, seed = 123
 )
 
-fit <- aopts(y = sim$X_hour, X = X, method = "clse")
-print(summary(fit))
+fit_clse <- aopts(y = sim$X_hour, X = X, method = "clse")
+fit_pl   <- aopts(y = sim$X_hour, X = X, method = "pl")
+
+print(summary(fit_clse))
+print(summary(fit_pl))
+
+
+
+## Example 2: Simulated ordinal time series with AR(2) latent correlation
+
+T <- 600
+K <- 5
+t <- 1:T
+
+X <- cbind(
+  Intercept = 1,
+  Trend = as.numeric(scale(t, scale = FALSE)),
+  c30 = cos(2*pi*t/30),
+  s30 = sin(2*pi*t/30)
+)
+
+cut_true   <- c(0.6, 1.4, 2.4)
+theta_true <- c(-0.5, 0.003, 0.20, -0.10)
+rho_true   <- c(0.6, 0.3)
+
+sim <- aop_sim(
+  ci = cut_true, theta = theta_true, rho = rho_true,
+  K = K, Ts = T, DesignX = X, seed = 123)
+
+fit_pl <- aopts(
+  y = sim$X_hour, X = X, method = "pl",
+  control = list(order_pair_lik = 5L, ar_order = 2L))
+print(summary(fit_pl))
 
 }

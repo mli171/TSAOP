@@ -37,7 +37,7 @@ static void   trans_prob_aop(const int position_t, const int k, double *result);
 void         gradient_CLSEW_aop(const double *param, double *gradient);
 static void  gradient_CLSEW_aop_single(const double *param);
 void         gradient_CLSEW_pair_aop(const int position1, const int position2, double *gradient_this_pair);
-void         score_by_t_CLSEW_aop(const double *param, double *scores);
+void         score_by_t_CLSEW_aop(const double *param, double *Wout);
 
 /* bivariate standard normal pdf (no integration) — forward decl */
 static double mydnorm2(const double x1, const double x2, const double rho);
@@ -179,14 +179,13 @@ void read_covariates(const double *design_matrix_input)
 static void read_parameters(const double *param)
 {
   int i;
-  Param.tau[0] = 0.0;                      /* τ1 fixed at 0 */
+  Param.tau[0] = 0.0;
 for (i = 1; i < (Dim.num_categ - 1); i++)
-  Param.tau[i] = param[i-1];             /* τ2..τ_{K-1} come first */
+  Param.tau[i] = param[i-1];
 
 for (i = 0; i < Dim.num_regr; i++)
   Param.beta[i] = param[i + Dim.num_categ - 2];
-
-Param.phi = param[Dim.num_categ + Dim.num_regr - 2];
+  Param.phi = param[Dim.num_categ + Dim.num_regr - 2];
 }
 
 static void build_limits(const int data_val,
@@ -197,17 +196,17 @@ static void build_limits(const int data_val,
 {
   int x = data_val;
   if (x > 1 && x < Dim.num_categ) {
-    *lim_inf = Param.tau[x-2] - regr;          /* τ_{x-1} - μ */
-*lim_sup = Param.tau[x-1] - regr;          /* τ_{x}   - μ */
-*infin = 2;
+    *lim_inf = Param.tau[x-2] - regr;
+    *lim_sup = Param.tau[x-1] - regr;
+    *infin = 2;
   } else if (x == 1) {
     *lim_inf = -BIG;
-    *lim_sup = Param.tau[0] - regr;            /* τ1 - μ = -μ */
-*infin = 0;
-  } else { /* x == K */
-*lim_inf = Param.tau[Dim.num_categ - 2] - regr;  /* τ_{K-1} - μ */
-*lim_sup = BIG;
-*infin = 1;
+    *lim_sup = Param.tau[0] - regr;
+    *infin = 0;
+  } else {
+    *lim_inf = Param.tau[Dim.num_categ - 2] - regr;
+    *lim_sup = BIG;
+    *infin = 1;
   }
 }
 
@@ -258,13 +257,13 @@ static double CLSEW_aop_single(const double *param)
 {
   (void)param;
   int tprev = current_index;       /* Y_{t-1} */
-int t     = current_index + 1;   /* Y_t     */
+int t     = current_index + 1;     /* Y_t     */
 
 double s = 0.0;
 for (int k = 1; k <= Dim.num_categ; k++) {
   double gk;
   trans_prob_aop(tprev, k, &gk);           /* P(Y_t=k | Y_{t-1}) */
-double Ik = data_matrix[t][k-1];         /* I_{t,k} */
+double Ik = data_matrix[t][k-1];           /* I_{t,k} */
 double diff = Ik - gk;
 s += diff * diff;
 }
@@ -276,7 +275,7 @@ return s;
 static void trans_prob_aop(const int position_t, const int k, double *result)
 {
   int t = position_t;        /* time t   -> X_t is observed data[t] */
-int l = position_t + 1;    /* time t+1 -> X_{t+1} target category k */
+int l = position_t + 1;    /* time t+1   -> X_{t+1} target category k */
 
 double corr = Param.phi;   /* lag-1 only */
 
@@ -369,7 +368,7 @@ void gradient_CLSEW_aop(const double *param,
     gradient[i] *= -2.0;
 }
 
-/* one step: sum over k the contributions (Ik - Pk) dPk/dθ into gradient_single
+/* one step: sum over k the contributions (Ik - Pk) dPk/dtheta into gradient_single
  current_index_g == -1  => t = 1 marginal branch
  current_index_g >= 0   => conditional term at t = current_index_g + 1       */
 static void gradient_CLSEW_aop_single(const double *param)
@@ -422,7 +421,7 @@ if (current_index_g < 0) {
   const double res_j   = gradient_this_pair[j-1];   /* I_{1,j}   - p_{1,j}   */
   const double res_j1  = gradient_this_pair[j];     /* I_{1,j+1} - p_{1,j+1} */
 
-  const int par_idx = j - 2; /* τ2..τ_{K-1} -> indices 0..K-3 */
+  const int par_idx = j - 2; /* tau2..tau_{K-1} -> indices 0..K-3 */
   gradient_single[par_idx] += (res_j - res_j1) * ph;
     }
   }
@@ -443,7 +442,7 @@ if (current_index_g < 0) {
 }
 
 /* position1 = tprev, position2 = k
- Write (Ik - Pk) * dPk/dθ into gradient_this_pair */
+ Write (Ik - Pk) * dPk/dtheta into gradient_this_pair */
 void gradient_CLSEW_pair_aop(const int position1,
                              const int position2,
                              double *gradient_this_pair)
@@ -514,19 +513,19 @@ if (inf2 != 1) {
   dN_db2 =  phi_b2 * (U - L);
 }
 
-/* ∂num/∂rho via signed corner pdfs */
+/* dnum/drho via signed corner pdfs */
 double dN_drho = 0.0;
 if (inf1 != 1 && inf2 != 1) dN_drho += mydnorm2(b1, b2, rho);
 if (inf1 != 0 && inf2 != 1) dN_drho -= mydnorm2(a1, b2, rho);
 if (inf1 != 1 && inf2 != 0) dN_drho -= mydnorm2(b1, a2, rho);
 if (inf1 != 0 && inf2 != 0) dN_drho += mydnorm2(a1, a2, rho);
 
-/* denominator partials wrt μ2 and its bounds */
+/* denominator partials wrt mu2 and its bounds */
 const double dDen_da2  = (inf2 != 0) ? -phi_a2 : 0.0;
 const double dDen_db2  = (inf2 != 1) ?  phi_b2 : 0.0;
 const double dDen_dmu2 = -(phi_b2 - phi_a2);
 
-/* betas via μ1, μ2 (quotient rule) */
+/* betas via mu1, mu2 (quotient rule) */
 {
   const double dN_dmu1 = -(dN_da1 + dN_db1);
   const double dN_dmu2 = -(dN_da2 + dN_db2);
@@ -541,32 +540,30 @@ const double dDen_dmu2 = -(phi_b2 - phi_a2);
   }
 }
 
-/* taus: time t (dim1) — direct mapping, τ1 fixed => index shift by -1 */
 if (k > 1) {
-  const int par_idx = (k - 2) - 1; /* τ_{k-2} -> param index k-3 (if >=0) */
+  const int par_idx = (k - 2) - 1;
 if (par_idx >= 0) {
   const double dPk = dN_da1 / denom;
   gradient_this_pair[par_idx] += resid * dPk;
 }
 }
 if (k < Dim.num_categ) {
-  const int par_idx = (k - 1) - 1; /* τ_{k-1} -> param index k-2 (if >=0) */
+  const int par_idx = (k - 1) - 1;
 if (par_idx >= 0) {
   const double dPk = dN_db1 / denom;
   gradient_this_pair[par_idx] += resid * dPk;
 }
 }
 
-/* taus: time t-1 (dim2) */
 {
   const int c = data[tprev];
-  if (c >= 3) { /* a2 uses τ_{c-2} -> param index c-3 */
-const int par_idx = (c - 3);
+  if (c >= 3) {
+    const int par_idx = (c - 3);
     const double dPk = (dN_da2 * denom - num * dDen_da2) / (denom * denom);
     gradient_this_pair[par_idx] += resid * dPk;
   }
-  if (c <= Dim.num_categ - 1) { /* b2 uses τ_{c-1} -> param index c-2 */
-const int par_idx = (c - 2);
+  if (c <= Dim.num_categ - 1) {
+    const int par_idx = (c - 2);
     if (par_idx >= 0) {
       const double dPk = (dN_db2 * denom - num * dDen_db2) / (denom * denom);
       gradient_this_pair[par_idx] += resid * dPk;
@@ -590,69 +587,138 @@ static double mydnorm2(const double x1,
   return Inv_TwoPiOne_Rho2 * exp(-0.5 * (x1*x1 + x2*x2 - 2.0*rho*x1*x2) / One_Rho2);
 }
 
-/* Exported: per-time score contributions s_t(θ) for t = 1..T
- scores is length Dim.num_time * Dim.num_param, column-major:
- scores[t + i*Dim.num_time] = s_t,i(θ)
- */
+/* -----------------------------------------------------------------------
+ * Moment-based "meat" matrix W_n for the CLS-lag1 objective.
+ *
+ * On input:
+ *   param  : parameter vector θ of length Dim.num_param
+ * On output:
+ *   Wout   : length Dim.num_param * Dim.num_param (column-major),
+ *            containing
+ *              W_n = 4 * sum_{t=2}^T L_t^T Cov(Y_t | F_{t-1}) L_t,
+ *            where rows of L_t are l_{t-1,k} = dp_{t,k}/dθ.
+ *
+ * NOTE: we start at t = 2 (index t=1 in C) and ignore t = 1
+ *       (marginal term); this has O(1/n) effect on the asymptotics.
+ * ----------------------------------------------------------------------- */
 void score_by_t_CLSEW_aop(const double *param,
-                          double *scores)
+                          double *Wout)
 {
-  int i, t;
+  int i, j, t, k, kp;
 
-  /* 1) Read parameters */
+  const int P = Dim.num_param;   /* number of parameters */
+  const int K = Dim.num_categ;   /* number of categories */
+  const int T = Dim.num_time;    /* length of series */
+
+  /* 1) Read parameters and precompute rho helpers */
   read_parameters(param);
 
-  /* 2) Precompute rho helpers (same as gradient_CLSEW_aop) */
-  One_Rho2          = 1.0 - Param.phi*Param.phi;
+  One_Rho2          = 1.0 - Param.phi * Param.phi;
   if (One_Rho2 < 1e-15) One_Rho2 = 1e-15;
-  sqrt_One_Rho2     = sqrt(One_Rho2);
-  Inv_TwoPiOne_Rho2 = 1.0 / (M_2PI * sqrt_One_Rho2);
+    sqrt_One_Rho2     = sqrt(One_Rho2);
+    Inv_TwoPiOne_Rho2 = 1.0 / (M_2PI * sqrt_One_Rho2);
 
-  /* 3) Compute means and bounds, same as in gradient_CLSEW_aop */
-  for (t = 0; t < Dim.num_time; ++t) {
-    means[t]          = 0.0;
-    Ct_Mut[t]         = 0.0;
-    Ctm1_Mut[t]       = 0.0;
-    density_Ct_Mut[t] = 0.0;
-    density_Ctm1_Mut[t]= 0.0;
-  }
-
-  for (t = 0; t < Dim.num_time; ++t) {
+  /* 2) Compute means: mu_t = X_t' beta */
+  for (t = 0; t < T; ++t) {
+    means[t] = 0.0;
     for (i = 0; i < Dim.num_regr; ++i)
       means[t] += Param.beta[i] * design_matrix[t][i];
+  }
 
-    if (data[t] == 1) {
-      Ct_Mut[t]   = Param.tau[data[t]-1] - means[t];
-      Ctm1_Mut[t] = -BIG;
-    } else if (data[t] < Dim.num_categ && data[t] > 1) {
-      Ct_Mut[t]   = Param.tau[data[t]-1] - means[t];
-      Ctm1_Mut[t] = Param.tau[data[t]-2] - means[t];
-    } else if (data[t] == Dim.num_categ) {
-      Ct_Mut[t]   = BIG;
-      Ctm1_Mut[t] = Param.tau[data[t]-2] - means[t];
+  /* 3) Initialize Wout to zero */
+  for (i = 0; i < P * P; ++i)
+    Wout[i] = 0.0;
+
+  /* 4) Allocate temporaries:
+  *    - L_flat: K x P matrix of l_{t-1,k} in row-major (k = row)
+  *    - p_t   : length K vector of p_{t,k}
+  *    - saved_row: original indicator row at time t
+  *    - grad1, grad0: temporary gradients for Ik=1 and Ik=0
+  */
+  double *L_flat    = (double*) R_Calloc(K * P, double);
+  double *p_t       = (double*) R_Calloc(K, double);
+  double *saved_row = (double*) R_Calloc(K, double);
+  double *grad1     = (double*) R_Calloc(P, double);
+  double *grad0     = (double*) R_Calloc(P, double);
+
+  /* 5) Loop over t = 2,...,T (C indices t=1,...,T-1) */
+  for (t = 1; t < T; ++t) {
+    int tprev = t - 1;
+
+    /* zero L_flat and p_t for this t */
+    for (k = 0; k < K; ++k) {
+      p_t[k] = 0.0;
+      for (i = 0; i < P; ++i)
+        L_flat[k * P + i] = 0.0;
     }
 
-    density_Ct_Mut[t]   = dnorm(Ct_Mut[t],   0.0, 1.0, 0);
-    density_Ctm1_Mut[t] = dnorm(Ctm1_Mut[t], 0.0, 1.0, 0);
+    /* save original row t of data_matrix */
+    for (k = 0; k < K; ++k)
+      saved_row[k] = data_matrix[t][k];
+
+    /* compute p_{t,k} and l_{t-1,k} = dp_{t,k}/dθ for each category k */
+    for (k = 1; k <= K; ++k) {
+
+      /* --- step 1: p_{t,k} = P(Y_t = k | Y_{t-1}) via trans_prob_aop --- */
+      double Pk;
+      trans_prob_aop(tprev, k, &Pk);
+      p_t[k - 1] = Pk;
+
+      /* --- step 2: gradient wrt theta using two calls to gradient_CLSEW_pair_aop --- */
+
+      /* case A: Ik = 1 at time t in category k */
+      for (kp = 0; kp < K; ++kp) data_matrix[t][kp] = 0.0;
+      data_matrix[t][k - 1] = 1.0;
+      gradient_CLSEW_pair_aop(tprev, k, grad1);
+
+      /* case B: Ik = 0 at time t (all zero indicators) */
+      for (kp = 0; kp < K; ++kp) data_matrix[t][kp] = 0.0;
+      gradient_CLSEW_pair_aop(tprev, k, grad0);
+
+      /* store l_{t-1,k} = grad1 - grad0 (dimension P) */
+      for (i = 0; i < P; ++i)
+        L_flat[(k - 1) * P + i] = grad1[i] - grad0[i];
+    }
+
+    /* restore original data_matrix row t */
+    for (k = 0; k < K; ++k)
+      data_matrix[t][k] = saved_row[k];
+
+    /* --- step 3: accumulate W_t = 4 * L^T Cov(Y_t|F_{t-1}) L --- */
+    for (i = 0; i < P; ++i) {
+      for (j = 0; j < P; ++j) {
+        double accum = 0.0;
+
+        /* sum over k, k' (Cov = diag(p) - p p^T) */
+        for (k = 0; k < K; ++k) {
+          double l_ki = L_flat[k * P + i];
+          double pk   = p_t[k];
+
+          /* diagonal: k' = k */
+          {
+            double cov_diag = pk * (1.0 - pk);
+            double l_kj     = L_flat[k * P + j];
+            accum += cov_diag * l_ki * l_kj;
+          }
+
+          /* off-diagonal: k' != k */
+          for (kp = 0; kp < K; ++kp) {
+            if (kp == k) continue;
+            double pk2    = p_t[kp];
+            double cov_off = - pk * pk2;
+            double l_kp_j  = L_flat[kp * P + j];
+            accum += cov_off * l_ki * l_kp_j;
+          }
+        }
+
+        Wout[i + j * P] += 4.0 * accum;
+      }
+    }
   }
 
-  /* 4) t = 1 (marginal term) -> current_index_g = -1 */
-  current_index_g = -1;
-  gradient_CLSEW_aop_single(param);  /* fills gradient_single */
-
-  for (i = 0; i < Dim.num_param; ++i) {
-    /* s_1,i = -2 * gradient_single[i] */
-    scores[0 + i * Dim.num_time] = -2.0 * gradient_single[i];
-  }
-
-  /* 5) t = 2..T (conditional terms) */
-  for (t = 0; t < Dim.num_time - 1; ++t) {
-    current_index_g = t;             /* this means current time = t+1 */
-  gradient_CLSEW_aop_single(param);
-
-  int row = t + 1;                 /* t=0 -> row=1 corresponds to time 2 */
-  for (i = 0; i < Dim.num_param; ++i) {
-    scores[row + i * Dim.num_time] = -2.0 * gradient_single[i];
-  }
-  }
+  R_Free(L_flat);
+  R_Free(p_t);
+  R_Free(saved_row);
+  R_Free(grad1);
+  R_Free(grad0);
 }
