@@ -17,19 +17,20 @@ remotes::install_github("mli171/TSAOP", build_vignettes = FALSE, force = TRUE)
 ```
 
 ## Model fitting example via simulated data
+
+### Example 1: Simulated ordinal time series with AR(1) latent correlation
+
 ```{r}
-## Example 1: Simulated ordinal time series with AR(1) latent correlation
-set.seed(1)
 T  <- 600
 K  <- 5
 t  <- 1:T
 
 # Design matrix: intercept + mild trend + ~30-day seasonality
 X <- cbind(
-Intercept = 1,
-Trend     = as.numeric(scale(t, scale = FALSE)),
-c30       = cos(2*pi*t/30),
-s30       = sin(2*pi*t/30)
+  Intercept = 1,
+  Trend     = as.numeric(scale(t, scale = FALSE)),
+  c30       = cos(2*pi*t/30),
+  s30       = sin(2*pi*t/30)
 )
 
 cut_true   <- c(0.5, 1.2, 2.0)
@@ -37,13 +38,48 @@ theta_true <- c(-0.5, 0.001, 0.30, -0.10)
 rho_true   <- 0.6
 
 sim <- aop_sim(
-ci = cut_true, theta = theta_true, rho = rho_true,
-K = K, Ts = T, DesignX = X, seed = 123
+  ci = cut_true, theta = theta_true, rho = rho_true,
+  K = K, Ts = T, DesignX = X, seed = 123
 )
 
-# using clse method
-fit <- aopts(y = sim$X_hour, X = X, method = "clse")
-print(summary(fit))
+fit_clse <- aopts(y = sim$X_hour, X = X, method = "clse")
+fit_pl   <- aopts(y = sim$X_hour, X = X, method = "pl")
+
+print(summary(fit_clse))
+print(summary(fit_pl))
+```
+
+### Example 2: Simulated ordinal time series with AR(2) latent correlation
+
+Currently only the maximize pairwise log-likelihood (``pl'') method is supported.
+
+```{r}
+T <- 600
+K <- 5
+t <- 1:T
+
+X <- cbind(
+  Intercept = 1,
+  Trend = as.numeric(scale(t, scale = FALSE)),
+  c30 = cos(2*pi*t/30),
+  s30 = sin(2*pi*t/30)
+)
+
+cut_true   <- c(0.6, 1.4, 2.4)
+theta_true <- c(-0.5, 0.003, 0.20, -0.10)
+rho_true   <- c(0.6, 0.3)
+
+sim <- aop_sim(
+  ci = cut_true, theta = theta_true, rho = rho_true,
+  K = K, Ts = T, DesignX = X, seed = 123
+)
+
+fit_pl <- aopts(
+  y = sim$X_hour, X = X, method = "pl",
+  control = list(order_pair_lik = 5L, ar_order = 2L)
+)
+
+print(summary(fit_pl))
 ```
 
 ## References
