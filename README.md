@@ -9,6 +9,10 @@ Supported methods:
 - Conditional least square with lag 1 estimator for AR(1) latent process (Watts et al., 2025);
 - Maximum pairwise log-likelihood estimator (Varin & Vidoni, 2006); 
 
+Additional useful features:
+
+- TSAOP includes a (uni- and multi-variate) **innovations algorithm** backend for Gaussian covariance-driven prediction and likelihood evaluation, with efficient C implementations and interchangeable covariance inputs (Toeplitz/autocovariance, full covariance matrix, or callback). See Brockwell & Davis (1991) for the standard innovations framework.
+
 To be added soon:
 
 - The sequential least square estimator will be added soon (Li and Lu, 2022);
@@ -18,7 +22,7 @@ You can install the development version from Github:
 
 ```{r}
 # install.packages("remotes")
-remotes::install_github("mli171/TSAOP", build_vignettes = FALSE, force = TRUE)
+remotes::install_github("mli171/TSAOP", build_vignettes = TRUE, force = TRUE)
 ```
 
 ## Model fitting example via simulated data
@@ -94,3 +98,5 @@ print(summary(fit_pl))
 [2] Li, M., & Lu, Q. (2022). *Changepoint detection in autocorrelated ordinal categorical time series*. *Environmetrics, 33*(7), e2752.
 
 [3] Varin, C., & Vidoni, P. (2006). Pairwise likelihood inference for ordinal categorical time series. *Computational Statistics & Data Analysis, 51*(4), 2365–2373.
+
+[4] Brockwell, P. J., & Davis, R. A. (1991). Time Series: Theory and Methods (2nd ed.). *Springer*.

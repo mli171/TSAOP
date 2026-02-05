@@ -25,6 +25,25 @@ void logPair_aop_ARp_Rcall_pl_arp(double *par, double *out);
 void gradient_logPair_aop_ARp_pl_arp(double *par, double *grad);
 void score_by_t_logPair_aop_ARp_pl_arp(double *par, double *scores);
 
+/* ---- innovations (.Call) prototypes (match innovations_uni.c) ---- */
+SEXP innovations_uni_gamma(SEXP gammaSEXP, SEXP uSEXP,
+                           SEXP jitterSEXP, SEXP lag_maxSEXP, SEXP lag_tolSEXP, SEXP aheadSEXP);
+SEXP innovations_uni_K(SEXP KSEXP, SEXP uSEXP,
+                       SEXP jitterSEXP, SEXP lag_maxSEXP, SEXP lag_tolSEXP, SEXP aheadSEXP);
+SEXP innovations_uni_kappa(SEXP kappaFunSEXP, SEXP uSEXP,
+                           SEXP jitterSEXP, SEXP lag_maxSEXP, SEXP lag_tolSEXP, SEXP aheadSEXP);
+
+/* ---- innovations (.Call) prototypes (match innovations_mv.c) ---- */
+SEXP innovations_mv_gamma(SEXP GammaSEXP, SEXP uSEXP,
+                          SEXP jitterSEXP, SEXP symmetrizeSEXP,
+                          SEXP lag_maxSEXP, SEXP lag_tolSEXP, SEXP aheadSEXP);
+SEXP innovations_mv_Kbig(SEXP KbigSEXP, SEXP uSEXP,
+                         SEXP jitterSEXP, SEXP symmetrizeSEXP,
+                         SEXP lag_maxSEXP, SEXP lag_tolSEXP, SEXP aheadSEXP);
+SEXP innovations_mv_kappa(SEXP kappaFunSEXP, SEXP uSEXP,
+                          SEXP jitterSEXP, SEXP symmetrizeSEXP,
+                          SEXP lag_maxSEXP, SEXP lag_tolSEXP, SEXP aheadSEXP);
+
 static const R_CMethodDef CEntries[] = {
   /* CLSEW-AR(1) */
   {"read_dimensions",      (DL_FUNC) &read_dimensions,    3},
@@ -52,7 +71,19 @@ static const R_CMethodDef CEntries[] = {
   {NULL, NULL, 0}
 };
 
+static const R_CallMethodDef CallEntries[] = {
+  {"innovations_uni_gamma", (DL_FUNC) &innovations_uni_gamma, 6},
+  {"innovations_uni_K",     (DL_FUNC) &innovations_uni_K,     6},
+  {"innovations_uni_kappa", (DL_FUNC) &innovations_uni_kappa, 6},
+
+  {"innovations_mv_gamma", (DL_FUNC) &innovations_mv_gamma, 7},
+  {"innovations_mv_Kbig",  (DL_FUNC) &innovations_mv_Kbig,  7},
+  {"innovations_mv_kappa", (DL_FUNC) &innovations_mv_kappa, 7},
+
+  {NULL, NULL, 0}
+};
+
 void R_init_TSAOP(DllInfo *dll) {
-  R_registerRoutines(dll, CEntries, NULL, NULL, NULL);
+  R_registerRoutines(dll, CEntries, CallEntries, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);
 }

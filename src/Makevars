@@ -1,6 +1,6 @@
 ## ---- Makevars (macOS/Linux) ----
 ## Build only the pieces we want; do NOT compile mvndstpack.f directly.
-OBJECTS = aop_PL.o init.o pair_aop_CLSW.o mvndstpack_pkg.o
+OBJECTS = aop_PL.o init.o pair_aop_CLSW.o mvndstpack_pkg.o innovations_uni.o innovations_mv.o
 
 all: $(SHLIB)
 

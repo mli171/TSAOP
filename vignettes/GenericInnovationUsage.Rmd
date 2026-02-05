@@ -1,0 +1,764 @@
+---
+title: "Innovation Algorithm with Customized Covariance Function"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Generic Innovation Usage}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+```
+
+```{r}
+library(TSAOP)
+if (!requireNamespace("pbivnorm", quietly = TRUE)) {
+  stop("Package 'pbivnorm' is required to build this vignette.")
+}
+```
+
+# Introduction
+
+This vignette demonstrates how to implement and validate innovation algorithms using only a user-supplied covariance accessor
+
+$$\kappa(i,j)=\text{Cov}(u_{i},u_{j}),$$
+without requiring an explicit state-space model or Kalman filter. The innovations algorithm provides a constructive way to compute:
+
+- one-step-ahead prediction coefficients,
+
+- innovation variances/covariances,
+
+- (optionally) innovations for observed data,
+
+from covariance information alone. This makes the method particularly convenient when $\kappa(i,j)$ is available in closed form or can be evaluated numerically, but an explicit likelihood or transition representation is inconvenient.
+
+A key design principle in this vignette is separation of concerns:
+
+- Model-specific work is isolated in a function that evaluates $\kappa(i,j)$ (for example, under a latent Gaussian AOP(1) ordinal probit model).
+
+- The innovations recursion is written once and remains completely generic, consuming only a function with signature $\kappa(i,j)$.
+
+In practice, this is implemented via closures: the model-specific parameters and time-varying quantities (e.g., latent means $\mu_{t}$ and marginal category probabilities) are captured inside a returned function $\kappa(i,j)$. The innovations algorithm then calls this accessor repeatedly, with no knowledge of the underlying model.
+
+Next, we follow the innovations algorithm description in Brockwell and Davis (1991) and provide both algorithm implementations and examples. Throughout, the examples emphasize reproducibility and interfaces that are easy to reuse in more complex estimation procedures (e.g., composite likelihood, CLS, penalized estimation).
+
+# Univariate innovations with AR(1) and ARMA(1,1)
+
+### 1.1 Problem set-up
+
+We consider a mean-zero scalar process $\{u_t\}_{t=1}^T$ with covariance function
+\[
+\kappa(i,j) = \mathrm{Cov}(u_i, u_j).
+\]
+Given an accessor `kappa(i, j)` that evaluates this scalar covariance, the univariate innovations
+recursion computes:
+
+- prediction coefficients $\theta_{t,j}$ for $t\ge 2$,
+- innovation variances $V_t=\mathrm{Var}(e_t)$,
+- and (optionally) the innovations $e_t$ and one-step predictors $\hat u_t$.
+
+The recursion has the innovations form:
+\[
+\hat{u}_1 = 0,\qquad e_1=u_1,
+\]
+and for $t\ge 2$,
+\[
+\hat{u}_t = \sum_{j=1}^{t-1}\theta_{t,j}e_{t-j},\qquad
+e_t=u_t-\hat{u}_t.
+\]
+
+### 1.2 The core function `uniInnov()`
+
+```{r, eval=FALSE}
+uniInnov(u, gamma = NULL, K = NULL, kappa = NULL, lag_max = NULL, lag_tol = 1e-08, ahead = 1L)
+```
+
+The function `uniInnov()` compute the univariate innovations algorithm for the zero-mean Gaussian process $\{u_{t}\}$ with user-specific, which calculate the linear prediction coefficients $\theta_{t,j}$'s and the innovation variance $V_{t}$'s. Several features have been included into this function:
+
+1. The covariance function `kappa(i, j)` above can be constructed in three ways. If we can assuming there is a stationary Toeplitz covariance, $\kappa(i,j)=\gamma_{|i-j|}$, we can just provide `gamma` only. If the $\kappa(i,j)$ covariance matrix is stationary and can be pre-computed, `K` accepts an explict $T\times T$ covariance matrix (not recommended if $T$ is large since reading-in large $K$ is computationally expensive). The third approach is the maximally flexible contribution, which accepts user's self-defined covariance function, $\kappa(i, j)$, through argument `kappa`.
+
+2. Truncated approximation. To improve the computational efficiency, we allows the innovation recursions are computed exactly only up to order `lag_max`. After that, the implementation reuses the same coefficient vector and variance. Additionally, given the innovation coefficients are getting smaller and smaller as $t$ getting far away from current time, we set `lag_tol=1e-08` and introduced a stopping point. The algorithm only use greater than `lag_tol` coefficients for final prediction.
+
+3. `ahead=h` computes the conditional mean $E[u_{t}|u_{1:t-h}]$ using the innovations representation; it does not simulate future values. Set ahead=NULL to skip this prediction calculation.
+
+Below we will provide simulated examples from Gaussian AR(1) and ARMA(1,1) processes using self-provided covariance functions to `kappa`.
+
+### 1.3 Examples from Gaussian AR(1) and ARMA(1,1) processes
+
+To check correctness of the univariate innovations implementation, we use a setting where the
+truth is known and maximum likelihood estimation is standard:
+
+1. Functions for simulating AR(1) and ARMA(1,1) data sets.
+
+```{r}
+simulate_ar1 <- function(T, phi, sigma, burn = 200) {
+  e <- rnorm(T + burn, sd = sigma)
+  x <- numeric(T + burn)
+  for (t in 2:(T + burn)) x[t] <- phi * x[t - 1] + e[t]
+  x[(burn + 1):(T + burn)]
+}
+
+simulate_arma11 <- function(T, phi, theta, sigma) {
+  as.numeric(arima.sim(model = list(ar = phi, ma = theta), n = T, sd = sigma))
+}
+```
+
+2. Compute the theoretical autocovariances $\gamma(h)$ implied by the parameters.
+3. Provide covariance functions `kappa(i,j)` to the innovations algorithm R wrapper.
+
+```{r}
+gamma_ar1 <- function(phi, sigma2, T) {
+  g0 <- sigma2 / (1 - phi^2)
+  g0 * (phi^(0:(T - 1L)))
+}
+
+gamma_arma11 <- function(phi, theta, sigma2, T) {
+  g0 <- sigma2 * (1 + theta^2 + 2 * phi * theta) / (1 - phi^2)
+  rho <- stats::ARMAacf(ar = phi, ma = theta, lag.max = T - 1L)
+  as.numeric(g0 * rho)  # length T: gamma[0..T-1]
+}
+```
+
+4. The objective functions of the Gaussian innovations likelihoods for parameter estimation.
+
+```{r}
+obj_ar1 <- function(par, x,
+                    jitter = 1e-10,
+                    eps = 1e-8,
+                    lag_max = NULL,
+                    lag_tol = 1e-8,
+                    ahead = NULL) {
+  
+  x <- as.numeric(x)
+  Tt <- length(x)
+  
+  a <- par[1]
+  b <- par[2]
+  phi    <- tanh(a)
+  sigma2 <- exp(b)
+  
+  if (!is.finite(phi) || !is.finite(sigma2) || sigma2 <= 0) return(Inf)
+  if (1 - phi^2 < eps) return(Inf)
+  
+  # only need gamma up to max lag used
+  L <- if (is.null(lag_max)) Tt else min(Tt, as.integer(lag_max) + 1L)
+  gamma <- gamma_ar1(phi = phi, sigma2 = sigma2, T = L)
+  
+  fit <- uniInnov(u = x, gamma = gamma,
+                  jitter = jitter,
+                  lag_max = lag_max,
+                  lag_tol = lag_tol,
+                  ahead = ahead)
+  
+  e <- fit$innov
+  v <- fit$v
+  if (any(!is.finite(v)) || any(v <= 0) || any(!is.finite(e))) return(Inf)
+  
+  0.5 * sum(log(v) + (e^2) / v)
+}
+
+
+obj_arma11 <- function(par, x,
+                       jitter = 1e-10,
+                       eps = 1e-8,
+                       lag_max = NULL,
+                       lag_tol = 1e-8,
+                       ahead = NULL) {
+  
+  x <- as.numeric(x)
+  Tt <- length(x)
+  
+  a <- par[1]; b <- par[2]; c <- par[3]
+  phi    <- tanh(a)
+  theta  <- tanh(b)
+  sigma2 <- exp(c)
+  
+  if (!is.finite(phi) || !is.finite(theta) || !is.finite(sigma2) || sigma2 <= 0) return(Inf)
+  if (1 - phi^2 < eps) return(Inf)
+  if (1 - theta^2 < eps) return(Inf)
+  
+  L <- if (is.null(lag_max)) Tt else min(Tt, as.integer(lag_max) + 1L)
+  gamma <- gamma_arma11(phi = phi, theta = theta, sigma2 = sigma2, T = L)
+  
+  fit <- uniInnov(u = x, gamma = gamma,
+                  jitter = jitter,
+                  lag_max = lag_max,
+                  lag_tol = lag_tol,
+                  ahead = ahead)
+  
+  e <- fit$innov
+  v <- fit$v
+  if (any(!is.finite(v)) || any(v <= 0) || any(!is.finite(e))) return(Inf)
+  
+  0.5 * sum(log(v) + (e^2) / v)
+}
+```
+
+5. The whole process using R `optim` to maximize the Gaussian innovations likelihoods and comparisons.
+
+```{r}
+T          <- 500
+phi_true   <- 0.6
+sigma_true <- 1.5   # innovation SD
+x_ar1      <- simulate_ar1(T, phi_true, sigma_true)
+x_ar1      <- x_ar1 - mean(x_ar1)
+
+start_phi    <- 0.2
+start_sigma2 <- var(x_ar1)
+
+par0 <- c(
+  atanh(max(min(start_phi, 0.99), -0.99)),
+  log(max(start_sigma2, 1e-12))
+)
+
+fitinnov_ar1 <- optim(par0, obj_ar1, method="BFGS", x=x_ar1,
+                      lag_max = 50, lag_tol = 1e-8, ahead = NULL)
+
+
+phi_hat    <- tanh(fitinnov_ar1$par[1])
+sigma2_hat <- exp(fitinnov_ar1$par[2])
+
+list(phi_hat = phi_hat,
+     sigma2_hat = sigma2_hat,
+     sigma2_true = sigma_true^2,
+     nll = - (fitinnov_ar1$value + 0.5 * T * log(2*pi)), # adding the constant
+     conv = fitinnov_ar1$convergence)
+
+fit_ar1 <- arima(x_ar1, order = c(1,0,0), include.mean = FALSE, method = "ML")
+fit_ar1
+```
+
+```{r}
+T <- 500
+phi_true   <- 0.5
+theta_true <- -0.2
+sigma_true <- 1     # innovation SD
+x_arma11   <- simulate_arma11(T, phi_true, theta_true, sigma_true)
+x_arma11   <- x_arma11 - mean(x_arma11)
+
+start_phi    <- 0.2
+start_theta  <- 0.1
+start_sigma2 <- var(x_arma11)
+
+par0 <- c(
+  atanh(max(min(start_phi,   0.99), -0.99)),
+  atanh(max(min(start_theta, 0.99), -0.99)),
+  log(max(start_sigma2, 1e-12))
+)
+
+fitinnov_arma11 <- optim(par0, obj_arma11, method = "BFGS", x = x_arma11,
+                         lag_max = 100, lag_tol = 1e-8, ahead = NULL)
+
+phi_hat    <- tanh(fitinnov_arma11$par[1])
+theta_hat  <- tanh(fitinnov_arma11$par[2])
+sigma2_hat <- exp(fitinnov_arma11$par[3])
+
+list(phi_hat = phi_hat,
+     theta_hat = theta_hat,
+     sigma2_hat = sigma2_hat,
+     sigma2_true = sigma_true^2,
+     nll = - (fitinnov_arma11$value + 0.5 * T * log(2*pi)), # adding the constant
+     conv = fitinnov_arma11$convergence)
+
+fit_arima11 <- arima(x_arma11, order = c(1,0,1), include.mean = FALSE, method = "ML")
+fit_arima11
+```
+
+Agreement between innovations-based estimates and `arima()` provides strong evidence that the
+recursion and bookkeeping are correct.
+
+
+## Multivariate innovations
+
+### 2.1 Problem set-up
+
+Let $\{u_t\}_{t=1}^T$ be an $m$-dimensional, zero-mean Gaussian process with block covariance
+\[
+K(i,j) \;=\; \mathrm{Cov}(u_i, u_j) \in \mathbb{R}^{m\times m}.
+\]
+
+The multivariate innovations algorithm constructs a sequence of:
+
+- **one-step-ahead predictors** $\hat{u}_t = \mathbb{E}[u_t \mid u_{1:t-1}]$
+- **innovations** $e_t = u_t - \hat{u}_t$
+- **innovation covariances** $V_t = \mathrm{Var}(e_t)$
+- **prediction coefficient matrices** $\Theta_{t,j}\in\mathbb{R}^{m\times m}$ such that
+\[
+\hat{u}_t \;=\; \sum_{j=1}^{t-1} \Theta_{t,j}\, e_{t-j}.
+\]
+
+This is a generalization of the scalar innovations recursion and is closely related to the Kalman filter, but it only requires access to the covariance function/blocks, not a state-space model.
+
+For each $t=1,\dots,T$:
+
+- `Theta[[t]]`: a list of coefficient matrices $\{\Theta_{t,1},\dots,\Theta_{t,t-1}\}$
+- `V[[t]]`: the innovation covariance $V_t$
+- `uhat[t,]`: the one-step conditional mean $\hat u_t$
+- `innov[t,]`: the innovation $e_t$
+- optionally `uhat_ahead[t,]`: an $h$-step conditional mean $\mathbb{E}[u_t\mid u_{1:t-h}]$
+
+Initialize at $t=1$:
+\[
+V_1 = K(1,1), \qquad \Theta_{1,\cdot} \text{ empty}.
+\]
+
+For $t=n+1$ (equivalently, recursion order $n=t-1$), compute coefficient blocks in reverse order:
+\[
+\Theta_{t,t-k} \;=\;
+\left(
+K(t,k) \;-\; \sum_{j=1}^{k-1} \Theta_{t,t-j}\, V_j\, \Theta_{k,k-j}^\top
+\right) V_k^{-1},
+\qquad k=1,\dots,t-1,
+\]
+and then update innovation covariance:
+\[
+V_t \;=\; K(t,t) \;-\; \sum_{j=1}^{t-1} \Theta_{t,j}\, V_{t-j}\, \Theta_{t,j}^\top.
+\]
+
+Finally,
+\[
+\hat u_t = \sum_{j=1}^{t-1} \Theta_{t,j}\, e_{t-j},\qquad e_t=u_t-\hat u_t.
+\]
+
+The multivariate innovation algorithm implementation `mvInnov()` provides the similar functionalities as in univariate one.
+
+### 2.2 The core function `mvInnov()`
+
+```{r eval=FALSE}
+mvInnov(u, Gamma = NULL, Kbig = NULL, kappa = NULL, lag_max = NULL, lag_tol = 1e-08, ahead = 1L)
+```
+
+### 2.3 Example from Gaussian vector AR(1) process
+
+Below is a testing example for vector AR(1) model using the multivariate innovation algorithm
+
+1. simulate VAR(1) data
+
+We consider a mean-zero vector autoregression of order 1:
+\[
+x_t = A x_{t-1} + e_t,\qquad e_t \sim N(0,\Sigma),
+\]
+where \(x_t \in \mathbb{R}^m\), \(A\in\mathbb{R}^{m\times m}\), and \(\Sigma\) is symmetric positive definite.
+Under stationarity (\(\rho(A)<1\)), the lag-\(h\) autocovariances are
+\[
+\Gamma(0) = A\Gamma(0)A^\top + \Sigma,\qquad \Gamma(h)=A^h\Gamma(0)\ \ (h\ge 1),
+\]
+and the cross-time covariance is
+\[
+\mathrm{Cov}(x_i,x_j)=
+\begin{cases}
+\Gamma(i-j), & i\ge j,\\
+\Gamma(j-i)^\top, & i<j.
+\end{cases}
+\]
+This provides a natural matrix-valued covariance accessor `kappa(i,j)` for the multivariate innovations algorithm.
+
+```{r}
+simulate_var1 <- function(T, A, Sigma, burn = 200) {
+  A <- as.matrix(A)
+  Sigma <- as.matrix(Sigma)
+  m <- nrow(A)
+  stopifnot(ncol(A) == m, all(dim(Sigma) == c(m, m)))
+
+  # E_t = z_t %*% chol(Sigma) gives Cov(E_t)=Sigma
+  R <- chol(Sigma)
+  Z <- matrix(rnorm((T + burn) * m), nrow = T + burn, ncol = m)
+  E <- Z %*% R
+
+  X <- matrix(0, nrow = T + burn, ncol = m)
+  for (t in 2:(T + burn)) {
+    X[t, ] <- as.numeric(A %*% X[t - 1, ]) + E[t, ]
+  }
+  X[(burn + 1):(T + burn), , drop = FALSE]
+}
+```
+
+2. Compute theoretical autocovariances $\Gamma(h)$ and provide `kappa(i,j)` = Cov(u_i,u_j) to `innovations_mv()`.
+
+```{r}
+Gamma_var1 <- function(A, Sigma, L) {
+  A <- as.matrix(A)
+  Sigma <- as.matrix(Sigma)
+  L <- as.integer(L)
+  m <- nrow(A)
+  stopifnot(ncol(A) == m, all(dim(Sigma) == c(m, m)))
+  if (L < 1L) stop("L must be >= 1.")
+
+  # Solve vec(G0) = (I - A ⊗ A)^{-1} vec(Sigma)
+  K <- kronecker(A, A)
+  I <- diag(m * m)
+
+  vecG0 <- solve(I - K, as.vector(Sigma))
+  if (any(!is.finite(vecG0)))
+    stop("Failed to compute Gamma(0); likely nonstationary A or ill-conditioned solve(I - A⊗A).")
+
+  G0 <- matrix(vecG0, m, m)
+  G0 <- (G0 + t(G0)) / 2  # numerical sym
+
+  Gamma <- array(0, dim = c(m, m, L))
+  Gamma[, , 1] <- G0
+
+  Apow <- diag(m)
+  if (L >= 2L) {
+    for (h in 1:(L - 1L)) {
+      Apow <- Apow %*% A
+      Gamma[, , h + 1L] <- Apow %*% G0
+    }
+  }
+  Gamma
+}
+```
+
+3. Fit parameters by maximizing Gaussian innovations likelihood
+
+```{r}
+obj_var1 <- function(par, U,
+                     jitter = 1e-10,
+                     eps = 1e-6,
+                     lag_max = NULL,
+                     lag_tol = 1e-8,
+                     ahead = NULL) {
+
+  U <- as.matrix(U)
+  Tt <- nrow(U)
+  m  <- ncol(U)
+  par <- as.numeric(par)
+
+  # unpack A
+  A <- matrix(par[1:(m * m)], m, m)
+
+  # unpack Sigma via L L'
+  idx <- m * m
+  d   <- par[(idx + 1):(idx + m)]
+  idx <- idx + m
+  off <- par[(idx + 1):(idx + m * (m - 1) / 2)]
+
+  L <- matrix(0, m, m)
+  diag(L) <- exp(d)
+  L[lower.tri(L)] <- off
+  Sigma <- L %*% t(L)
+
+  if (any(!is.finite(A)) || any(!is.finite(Sigma))) return(Inf)
+
+  # stationarity constraint: spectral radius(A) < 1 - eps
+  rhoA <- tryCatch(max(Mod(eigen(A, only.values = TRUE)$values)),
+                   error = function(e) Inf)
+  if (!is.finite(rhoA) || rhoA >= (1 - eps)) return(Inf)
+
+  # Gamma length needed
+  Lneeded <- if (is.null(lag_max)) Tt else min(Tt, as.integer(lag_max) + 1L)
+  if (!is.null(lag_max) && Lneeded < 1L) return(Inf)
+
+  Gamma <- tryCatch(Gamma_var1(A, Sigma, L = Lneeded), error = function(e) NULL)
+  if (is.null(Gamma)) return(Inf)
+
+  fit <- tryCatch(
+    mvInnov(u = U,
+            Gamma = Gamma,
+            jitter = jitter,
+            symmetrize = TRUE,
+            lag_max = lag_max,
+            lag_tol = lag_tol,
+            ahead = ahead),   # keep NULL inside objective unless you need it
+    error = function(e) NULL
+  )
+  if (is.null(fit)) return(Inf)
+
+  E <- fit$innov
+  V <- fit$V
+
+  # Gaussian nll up to constant: 0.5 sum_t [ log|V_t| + e_t' V_t^{-1} e_t ]
+  nll <- 0
+  for (t in 1:Tt) {
+    Rt <- tryCatch(chol(V[[t]]), error = function(e) NULL)
+    if (is.null(Rt)) return(Inf)
+
+    z <- backsolve(Rt, E[t, ], transpose = TRUE)
+    quad <- sum(z^2)
+    logdet <- 2 * sum(log(diag(Rt)))
+
+    nll <- nll + 0.5 * (logdet + quad)
+  }
+
+  nll
+}
+```
+
+4. Compare to OLS/conditional-ML VAR(1) (they coincide under Gaussian assumptions)
+
+
+```{r}
+T <- 500
+m <- 2
+
+A_true <- matrix(c(0.6, 0.2,
+                   0.0, 0.4), 2, 2, byrow = TRUE)
+
+Sigma_true <- matrix(c(1.0, 0.3,
+                       0.3, 2.0), 2, 2, byrow = TRUE)
+
+U <- simulate_var1(T, A_true, Sigma_true)
+U <- scale(U, center = TRUE, scale = FALSE)
+
+## OLS start: X1 = X0 %*% t(A) + E
+X0 <- U[1:(T - 1), , drop = FALSE]
+X1 <- U[2:T,       , drop = FALSE]
+
+At_ols <- solve(crossprod(X0), crossprod(X0, X1))
+A_ols  <- t(At_ols)
+E_ols  <- X1 - X0 %*% t(A_ols)
+Sigma_ols <- crossprod(E_ols) / nrow(E_ols)
+
+## Build par0 from (A_ols, Sigma_ols) using Sigma = L L'
+L0 <- t(chol(Sigma_ols))      # lower-triangular
+d0 <- log(diag(L0))
+off0 <- L0[lower.tri(L0)]
+par0 <- c(as.vector(A_ols), d0, off0)
+
+fitinnov_var1 <- optim(
+  par0,
+  obj_var1,
+  method = "BFGS",
+  U = U,
+  lag_max = 20,
+  lag_tol = 1e-8,
+  ahead = NULL
+)
+
+## Extract estimates
+A_hat <- matrix(fitinnov_var1$par[1:(m * m)], m, m)
+
+idx <- m * m
+d_hat <- fitinnov_var1$par[(idx + 1):(idx + m)]
+idx <- idx + m
+off_hat <- fitinnov_var1$par[(idx + 1):(idx + m * (m - 1) / 2)]
+
+L_hat <- matrix(0, m, m)
+diag(L_hat) <- exp(d_hat)
+L_hat[lower.tri(L_hat)] <- off_hat
+Sigma_hat <- L_hat %*% t(L_hat)
+
+list(
+  conv = fitinnov_var1$convergence,
+  nll  = fitinnov_var1$value,
+  A_true = A_true,
+  A_ols  = A_ols,
+  A_innov = A_hat,
+  Sigma_true = Sigma_true,
+  Sigma_ols  = Sigma_ols,
+  Sigma_innov = Sigma_hat
+)
+```
+
+## Multivariate Innovation Algorithm with AOP(1) Conditional Least Squares
+
+```{r}
+library(pbivnorm)
+
+pbiv_safe <- function(x, y, r) {
+  x <- as.numeric(x); y <- as.numeric(y)
+  out <- numeric(length(x))
+
+  out[x == -Inf | y == -Inf] <- 0
+  out[x == Inf & y == Inf] <- 1
+
+  idx <- (x == Inf & is.finite(y))
+  if (any(idx)) out[idx] <- stats::pnorm(y[idx])
+
+  idx <- (y == Inf & is.finite(x))
+  if (any(idx)) out[idx] <- stats::pnorm(x[idx])
+
+  fin <- is.finite(x) & is.finite(y)
+  if (any(fin)) out[fin] <- pbivnorm::pbivnorm(x[fin], y[fin], r)
+
+  out
+}
+
+multikappa_pbivnorm <- function(i, j, msti, mstj, EXwi, EXwj, seg, rho) {
+
+  msti <- as.numeric(msti); mstj <- as.numeric(mstj)
+  rho  <- as.numeric(rho)
+  seg  <- as.numeric(seg)
+  EXwi <- as.numeric(EXwi)
+  EXwj <- as.numeric(EXwj)
+
+  K <- length(seg) - 1L
+  m <- K - 1L
+
+  if (i == j) {
+    p <- EXwi
+    return(diag(p, m, m) - tcrossprod(p))
+  }
+
+  r <- rho^abs(i - j)
+
+  lo1 <- seg[1:m]       - msti
+  up1 <- seg[2:(m + 1)] - msti
+  lo2 <- seg[1:m]       - mstj
+  up2 <- seg[2:(m + 1)] - mstj
+
+  x_up <- rep(up1, each = m)
+  x_lo <- rep(lo1, each = m)
+  y_up <- rep(up2, times = m)
+  y_lo <- rep(lo2, times = m)
+
+  Fuu <- pbiv_safe(x_up, y_up, r)
+  Flu <- pbiv_safe(x_lo, y_up, r)
+  Ful <- pbiv_safe(x_up, y_lo, r)
+  Fll <- pbiv_safe(x_lo, y_lo, r)
+
+  pij <- Fuu - Flu - Ful + Fll
+  EWW <- matrix(pij, nrow = m, byrow = TRUE)
+  EWW - tcrossprod(EXwi, EXwj)
+}
+
+
+CLSWInnov <- function(par,
+                      Xw,
+                      DesignX,
+                      lag_max = 50L,
+                      lag_tol = 1e-6,
+                      jitter = 1e-10) {
+
+  if (!requireNamespace("pbivnorm", quietly = TRUE))
+    stop("Package 'pbivnorm' is required.")
+
+  Xw <- as.matrix(Xw)
+  DesignX <- as.matrix(DesignX)
+
+  Ts <- nrow(Xw)
+  K  <- ncol(Xw)
+  q  <- ncol(DesignX)
+
+  dcut <- par[1:(K - 2L)]
+  cuts_ci <- cumsum(exp(dcut))
+  cuts_all <- c(0, cuts_ci)
+  seg <- c(-Inf, cuts_all, Inf)
+
+  theta <- par[(K - 1L):(K - 2L + q)]
+  rho_u <- par[K - 2L + q + 1L]
+  if (!is.finite(rho_u)) return(Inf)
+  rho <- tanh(rho_u)
+
+  mst <- as.numeric(DesignX %*% theta)
+
+  # category probabilities
+  Fmat <- stats::pnorm(outer(mst, seg, function(mu, c) c - mu))
+  Pmat <- Fmat[, 2:(K + 1L), drop = FALSE] - Fmat[, 1:K, drop = FALSE]
+
+  # E[W_{t,1:(K-1)}]
+  EXW <- Pmat[, 1:(K - 1L), drop = FALSE]
+
+  # centered indicator residuals u_t = W_t - E[W_t]
+  u <- Xw[, 1:(K - 1L), drop = FALSE] - EXW
+
+  # kappa(i,j) block covariance for u_t (dimension m x m with m=K-1)
+  kappa <- function(i, j) {
+    multikappa_pbivnorm(i, j,
+                        msti = mst[i], mstj = mst[j],
+                        EXwi = EXW[i, ], EXwj = EXW[j, ],
+                        seg  = seg, rho = rho)
+  }
+
+  # C-backed innovations (kappa backend)
+  fit <- tryCatch(
+    TSAOP::mvInnov(u = u,
+                   kappa = kappa,
+                   jitter = jitter,
+                   symmetrize = TRUE,
+                   lag_max = lag_max,
+                   lag_tol = lag_tol,
+                   ahead = NULL),
+    error = function(e) NULL
+  )
+  if (is.null(fit)) return(Inf)
+
+  # prediction E[W_{t,1:(K-1)} | past] = EXW + uhat
+  PredX <- EXW + fit$uhat
+  Pred_last <- 1 - rowSums(PredX)
+  Predw <- cbind(PredX, Pred_last)
+
+  sum((Xw - Predw)^2)
+}
+
+unpack_CLSWInnov_par <- function(par, K, q) {
+  stopifnot(length(par) == (K - 2L + q + 1L))
+  
+  dcut  <- par[1:(K - 2L)]
+  cuts  <- cumsum(exp(dcut))        # c2..c_{K-1}
+  theta <- par[(K - 1L):(K - 2L + q)]
+  rho   <- tanh(par[K - 2L + q + 1L])
+  
+  list(dcut = dcut, cuts = cuts, theta = theta, rho = rho)
+}
+
+library(TSAOP)
+
+T  <- 1000
+K  <- 5
+trend  <- 1:T
+
+# Design matrix: intercept + mild trend + ~30-day seasonality
+X <- cbind(
+  Intercept = 1,
+  Trend     = as.numeric(trend/T),
+  c30       = cos(2*pi*trend/30),
+  s30       = sin(2*pi*trend/30)
+)
+
+cut_true   <- c(0.5, 1.2, 2.0)
+theta_true <- c(-0.5, 0.2, 0.30, -0.10)
+rho_true   <- 0.6
+
+sim <- aop_sim(
+  ci = cut_true, theta = theta_true, rho = rho_true,
+  K = K, Ts = T, DesignX = X
+)
+
+Xw <- sim$X_hour_wide
+DesignX <- X
+
+Ts <- nrow(Xw); K <- ncol(Xw); q <- ncol(DesignX)
+
+# initial value
+par0 <- c(
+  rep(log(0.5), K - 2L),   # dcut: exp(dcut)=0.5 increments -> cuts approx (0.5,1.0,1.5)
+  rep(0, q),               # theta
+  atanh(0.2)               # rho_u so rho ~ 0.2
+)
+
+fit <- optim(par0, CLSWInnov,
+             Xw = Xw, DesignX = DesignX,
+             method = "BFGS",
+             control = list(maxit = 200),
+             lag_max = 50L,
+             lag_tol = NULL,
+             jitter = 1e-10)
+
+fit$value
+u <- unpack_CLSWInnov_par(fit$par, K, q)
+
+c(c2 = u$cuts[1], c3 = u$cuts[2], c4 = u$cuts[3], u$theta, rho = u$rho)
+
+```
+
+
+Similar parameter estimation results from the clse-lag1 and maximize pairwise likelihood estimator.
+
+```{r}
+fit_clse <- aopts(y = sim$X_hour, X = X, method = "clse")
+fit_pl   <- aopts(y = sim$X_hour, X = X, method = "pl",
+                  control = list(order_pair_lik = 5L, ar_order = 1L))
+
+print(summary(fit_clse))
+print(summary(fit_pl))
+```
+
+
+## References
+
+Brockwell, P. J., and Davis, R. A. (1991). *Time Series: Theory and Methods* (2nd ed.). Springer.
+
+

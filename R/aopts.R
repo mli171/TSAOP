@@ -136,7 +136,7 @@
 #' @references
 #' Varin, C. and Vidoni, P. (2006).
 #' \emph{Pairwise likelihood inference for ordinal categorical time series}.
-#' \emph{Computational Statistics \& Data Analysis} \bold{51}(4), 2365--2373.
+#' \emph{Computational Statistics \verb{&} Data Analysis} \bold{51}(4), 2365--2373.
 #'
 #' @export
 aopts <- function(y, X,

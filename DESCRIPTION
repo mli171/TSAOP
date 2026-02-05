@@ -21,6 +21,7 @@ BugReports: https://github.com/mli171/TSAOP/issues
 Suggests: 
     knitr,
     rmarkdown,
+    pbivnorm,
     mia,
     testthat (>= 3.0.0)
 Encoding: UTF-8

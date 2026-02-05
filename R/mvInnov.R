@@ -1,0 +1,194 @@
+#' Multivariate innovations algorithm (generic covariance backend)
+#'
+#' Compute the multivariate innovations representation for a zero-mean Gaussian
+#' vector time series \eqn{u_1,\dots,u_T}, where each \eqn{u_t \in \mathbb{R}^m},
+#' given access to the block covariance \eqn{K(i,j) = \mathrm{Cov}(u_i, u_j)}.
+#'
+#' The algorithm computes, for each time \eqn{t}, a set of matrix coefficients
+#' \eqn{\Theta_{t,j} \in \mathbb{R}^{m\times m}} and innovation covariance matrices
+#' \eqn{V_t \in \mathbb{R}^{m\times m}} such that
+#' \deqn{\hat u_t = \sum_{j=1}^{t-1} \Theta_{t,j}\, e_{t-j}, \qquad e_t = u_t - \hat u_t,}
+#' where \eqn{e_t} are one-step innovations with covariance \eqn{V_t}.
+#'
+#' This wrapper dispatches to a C implementation via registered \code{.Call()}
+#' routines and supports three interchangeable covariance backends:
+#' \itemize{
+#'   \item \strong{Block Toeplitz} via \code{Gamma}: a 3D array \code{m x m x L} storing
+#'         one-sided lag covariances \eqn{\Gamma_h = \mathrm{Cov}(u_t, u_{t-h})} for \eqn{h\ge 0}.
+#'         This is typically fastest and avoids repeated covariance lookups.
+#'   \item \strong{Full covariance} via \code{Kbig}: an explicit \eqn{(Tm)\times(Tm)} covariance matrix
+#'         for \code{vec(u)}. This is general but can be large in memory.
+#'   \item \strong{Callback} via \code{kappa(i,j)}: an R function returning an \code{m x m} block
+#'         \eqn{K(i,j)}. This is most flexible but can be much slower due to R-to-C calls.
+#' }
+#'
+#' @param u Numeric matrix of dimension \eqn{T \times m}. Rows correspond to time,
+#'   columns to components. Typically mean-corrected.
+#'
+#' @param Gamma Optional block-Toeplitz lag covariance array of dimension \code{m x m x L},
+#'   where \code{Gamma[,,h+1]} equals \eqn{\Gamma_h = \mathrm{Cov}(u_t, u_{t-h})} for \eqn{h=0,1,\dots,L-1}.
+#'   Only one-sided blocks are required. For \eqn{i<j}, the implied covariance is \eqn{K(i,j)=\Gamma_{j-i}^\top}.
+#'   Must be long enough for the maximum lag accessed: at least \code{T} if \code{lag_max} is \code{NULL},
+#'   otherwise at least \code{lag_max + 1}.
+#'
+#' @param Kbig Optional full covariance matrix for \code{vec(u)} of dimension \eqn{(T m)\times(T m)}.
+#'   The block \eqn{K(i,j)} is extracted as rows \code{((i-1)m+1):(im)} and columns \code{((j-1)m+1):(jm)}.
+#'
+#' @param kappa Optional function \code{kappa(i,j)} returning an \code{m x m} numeric matrix \eqn{K(i,j)}.
+#'   Indices \code{i,j} are 1-based. If \code{symmetrize=TRUE}, only diagonal blocks \eqn{K(t,t)} are symmetrized.
+#'
+#' @param jitter Nonnegative scalar. A small ridge term is added to each innovation covariance \code{V[[t]]}
+#'   (via \code{jitter * I_m}) to improve numerical stability if matrices are nearly singular.
+#'   Default \code{1e-10}.
+#'
+#' @param symmetrize Logical. If \code{TRUE} (default), diagonal blocks \eqn{K(t,t)} and innovation covariances
+#'   \eqn{V_t} are symmetrized internally as \eqn{(A + A^\top)/2} before Cholesky/inversion steps.
+#'   Off-diagonal blocks \eqn{K(i,j)} for \eqn{i\ne j} are not symmetrized.
+#'
+#' @param lag_max Optional integer. If \code{NULL} (default), the recursion is computed up to order \eqn{T-1}.
+#'   If supplied, the recursion is computed up to \code{min(lag_max, T-1)} and then \strong{frozen}:
+#'   subsequent \code{Theta[[t]]} and \code{V[[t]]} reuse the final computed objects (fixed-order approximation).
+#'
+#' @param lag_tol Optional nonnegative scalar. If not \code{NULL}, enables early stopping:
+#'   after fitting order \eqn{n} (at time \eqn{t=n+1}), the recursion stops when the maximum absolute entry
+#'   of the highest-lag coefficient matrix satisfies \code{max(abs(Theta[[t]][[n]])) < lag_tol}.
+#'   Default \code{1e-8}. Use \code{NULL} to disable tolerance stopping.
+#'
+#' @param ahead Integer \eqn{h \ge 1}. If not \code{NULL}, also compute the \eqn{h}-step-ahead conditional mean
+#'   \eqn{E[u_t \mid u_{1:(t-h)}]} based on the innovations representation. If \code{1L},
+#'   \code{uhat_ahead} equals \code{uhat}. If \code{NULL}, \code{uhat_ahead} is omitted.
+#'
+#' @param PACKAGE Character scalar giving the package/DLL name used for registered symbol lookup in \code{.Call()}.
+#'   Defaults to \code{"TSAOP"}.
+#'
+#' @return A named list with components:
+#' \describe{
+#'   \item{Theta}{List of length \eqn{T}. Each \code{Theta[[t]]} is a list of length \code{t-1} (or frozen length),
+#'     where \code{Theta[[t]][[j]]} is an \eqn{m\times m} coefficient matrix multiplying \code{innov[t-j, ]}.}
+#'   \item{V}{List of length \eqn{T}. Each \code{V[[t]]} is an \eqn{m\times m} innovation covariance matrix \eqn{V_t}.}
+#'   \item{uhat}{Numeric matrix \eqn{T\times m} of one-step conditional means \eqn{\hat u_t}.}
+#'   \item{innov}{Numeric matrix \eqn{T\times m} of one-step innovations \eqn{e_t}.}
+#'   \item{uhat_ahead}{If \code{ahead} is not \code{NULL}, numeric matrix \eqn{T\times m} of \eqn{h}-step-ahead means;
+#'     otherwise \code{NULL}.}
+#'   \item{mylag}{Integer. The final recursion order actually computed (may be \code{< T-1} due to \code{lag_max}
+#'     or early stopping via \code{lag_tol}).}
+#' }
+#'
+#' @details
+#' \strong{Gaussian likelihood (up to a constant).}
+#' If you want a negative log-likelihood contribution from the innovations output,
+#' a common form is
+#' \deqn{\frac12 \sum_{t=1}^T \left( \log |V_t| + e_t^\top V_t^{-1} e_t \right),}
+#' where \eqn{e_t} are the rows of \code{innov} and \eqn{V_t} are the matrices in \code{V}.
+#'
+#' \strong{Performance.}
+#' The \code{Gamma} backend is typically fastest. The \code{kappa} callback can be substantially slower
+#' for large \eqn{T} because it requires many calls back into R.
+#'
+#' @examples
+#' # Example: VAR(1) with block Toeplitz backend (Gamma)
+#' set.seed(1)
+#' Tt <- 200
+#' A <- matrix(c(0.6, 0.1,
+#'               0.0, 0.4), 2, 2, byrow = TRUE)
+#' Sigma <- matrix(c(1.0, 0.3,
+#'                   0.3, 0.8), 2, 2)
+#'
+#' simulate_var1 <- function(T, A, Sigma, burn = 200) {
+#'   A <- as.matrix(A); Sigma <- as.matrix(Sigma)
+#'   m <- nrow(A)
+#'   U <- matrix(0, T + burn, m)
+#'   Z <- matrix(rnorm((T + burn) * m), T + burn, m)
+#'   E <- Z %*% chol(Sigma)
+#'   for (t in 2:(T + burn)) U[t, ] <- A %*% U[t - 1, ] + E[t, ]
+#'   U[(burn + 1):(T + burn), , drop = FALSE]
+#' }
+#'
+#' Gamma_var1 <- function(A, Sigma, L) {
+#'   A <- as.matrix(A); Sigma <- as.matrix(Sigma)
+#'   m <- nrow(A)
+#'   M <- diag(m*m) - kronecker(A, A)
+#'   vecG0 <- solve(M, as.vector(Sigma))
+#'   G0 <- matrix(vecG0, m, m)
+#'
+#'   Gamma <- array(0, dim = c(m, m, L))
+#'   Gamma[, , 1] <- G0
+#'   Ah <- diag(m)
+#'   for (h in 1:(L - 1L)) {
+#'     Ah <- Ah %*% A
+#'     Gamma[, , h + 1L] <- Ah %*% G0
+#'   }
+#'   Gamma
+#' }
+#'
+#' u <- simulate_var1(Tt, A, Sigma)
+#' u <- scale(u, center = TRUE, scale = FALSE)
+#' Gamma <- Gamma_var1(A, Sigma, L = Tt)
+#'
+#' fit <- mvInnov(u, Gamma = Gamma, lag_max = NULL, lag_tol = NULL, ahead = 2L)
+#' str(fit, max.level = 2)
+#'
+#' @export
+mvInnov <- function(u, Gamma = NULL, Kbig = NULL, kappa = NULL,
+                    jitter = 1e-10, symmetrize = TRUE,
+                    lag_max = NULL, lag_tol = 1e-8, ahead = 1L,
+                    PACKAGE = "TSAOP") {
+
+  u <- as.matrix(u)
+  if (!is.numeric(u)) storage.mode(u) <- "double"
+  Tt <- nrow(u); m <- ncol(u)
+  if (Tt < 1L || m < 1L) stop("u must be a T x m numeric matrix with T>=1, m>=1.")
+
+  n_backends <- (!is.null(Gamma)) + (!is.null(Kbig)) + (!is.null(kappa))
+  if (n_backends != 1L) stop("Provide exactly one of: Gamma, Kbig, or kappa.")
+
+  jitter <- as.numeric(jitter)
+  if (!is.finite(jitter) || jitter < 0) stop("jitter must be finite and >= 0.")
+
+  symmetrize <- as.logical(symmetrize)[1]
+
+  if (!is.null(lag_max)) {
+    lag_max <- as.integer(lag_max)
+    if (!is.finite(lag_max) || lag_max < 1L) stop("lag_max must be >= 1 or NULL.")
+  }
+  if (!is.null(lag_tol)) {
+    lag_tol <- as.numeric(lag_tol)
+    if (!is.finite(lag_tol) || lag_tol < 0) stop("lag_tol must be finite and >= 0, or NULL.")
+  }
+  if (!is.null(ahead)) {
+    ahead <- as.integer(ahead)
+    if (!is.finite(ahead) || ahead < 1L) stop("ahead must be >= 1 or NULL.")
+  }
+
+  if (!is.null(Gamma)) {
+    if (is.list(Gamma)) {
+      Gamma <- simplify2array(Gamma)
+    }
+    if (!is.array(Gamma) || length(dim(Gamma)) != 3L) {
+      stop("Gamma must be a 3D array (m x m x L) or a list of m x m matrices.")
+    }
+    d <- dim(Gamma)
+    if (d[1] != m || d[2] != m) stop("Gamma must have dim (m, m, L) matching ncol(u)=m.")
+    storage.mode(Gamma) <- "double"
+
+    .Call("innovations_mv_gamma", Gamma, u,
+          jitter, symmetrize, lag_max, lag_tol, ahead,
+          PACKAGE = PACKAGE)
+
+  } else if (!is.null(Kbig)) {
+    if (!is.matrix(Kbig)) Kbig <- as.matrix(Kbig)
+    storage.mode(Kbig) <- "double"
+    if (nrow(Kbig) != Tt*m || ncol(Kbig) != Tt*m)
+      stop("Kbig must be a (T*m) x (T*m) matrix with T=nrow(u), m=ncol(u).")
+
+    .Call("innovations_mv_Kbig", Kbig, u,
+          jitter, symmetrize, lag_max, lag_tol, ahead,
+          PACKAGE = PACKAGE)
+
+  } else {
+    if (!is.function(kappa)) stop("kappa must be a function kappa(i,j) returning an m x m matrix.")
+    .Call("innovations_mv_kappa", kappa, u,
+          jitter, symmetrize, lag_max, lag_tol, ahead,
+          PACKAGE = PACKAGE)
+  }
+}
