@@ -6,7 +6,7 @@ Autoregressive ordinal probit model fitting for ordinal time series data.
 
 Supported methods:
 
-- Conditional least square with lag 1 estimator for AR(1) latent process (Watts et al., 2025);
+- Conditional least square with lag 1 estimator for AR(1) latent process (Watts et al., 2026);
 - Maximum pairwise log-likelihood estimator (Varin & Vidoni, 2006); 
 
 Additional useful features:
