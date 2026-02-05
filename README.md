@@ -11,7 +11,7 @@ Supported methods:
 
 Additional useful features:
 
-- TSAOP includes a (uni- and multi-variate) **innovations algorithm** backend for Gaussian covariance-driven prediction and likelihood evaluation, with efficient C implementations and interchangeable covariance inputs (Toeplitz/autocovariance, full covariance matrix, or callback). See Brockwell & Davis (1991) for the standard innovations framework.
+- TSAOP includes a (uni- and multi-variate) **innovations algorithm** backend for covariance-driven prediction and likelihood evaluation, with efficient C implementations and interchangeable covariance inputs (Toeplitz/autocovariance, full covariance matrix, or callback). See Brockwell & Davis (1991) for the standard innovations framework and the vignettes (GenericInnovationUsage.Rmd) for detailed implementation with examples.
 
 To be added soon:
 
