@@ -7,8 +7,9 @@
 #' The algorithm computes, for each time \eqn{t}, a set of matrix coefficients
 #' \eqn{\Theta_{t,j} \in \mathbb{R}^{m\times m}} and innovation covariance matrices
 #' \eqn{V_t \in \mathbb{R}^{m\times m}} such that
-#' \deqn{\hat u_t = \sum_{j=1}^{t-1} \Theta_{t,j}\, e_{t-j}, \qquad e_t = u_t - \hat u_t,}
-#' where \eqn{e_t} are one-step innovations with covariance \eqn{V_t}.
+#' \deqn{\hat u_t = \sum_{j=1}^{L_t} \Theta_{t,j}\, e_{t-j}, \qquad e_t = u_t - \hat u_t,}
+#' where \eqn{e_t} are one-step innovations with covariance \eqn{V_t}, and
+#' \eqn{L_t \le t-1} is the number of lag matrices retained at time \eqn{t}.
 #'
 #' This wrapper dispatches to a C implementation via registered \code{.Call()}
 #' routines and supports three interchangeable covariance backends:
@@ -45,14 +46,16 @@
 #'   \eqn{V_t} are symmetrized internally as \eqn{(A + A^\top)/2} before Cholesky/inversion steps.
 #'   Off-diagonal blocks \eqn{K(i,j)} for \eqn{i\ne j} are not symmetrized.
 #'
-#' @param lag_max Optional integer. If \code{NULL} (default), the recursion is computed up to order \eqn{T-1}.
-#'   If supplied, the recursion is computed up to \code{min(lag_max, T-1)} and then \strong{frozen}:
-#'   subsequent \code{Theta[[t]]} and \code{V[[t]]} reuse the final computed objects (fixed-order approximation).
+#' @param lag_max Optional integer. If \code{NULL} (default), the algorithm may retain up to \eqn{T-1} lags.
+#'   If supplied, \code{lag_max} is a \strong{hard cap} on the number of lag matrices retained/used:
+#'   at each time \eqn{t}, \code{Theta[[t]]} has length \code{L_t = min(t-1, lag_max_used)}, where
+#'   \code{lag_max_used <= lag_max}. This controls memory and computation.
 #'
-#' @param lag_tol Optional nonnegative scalar. If not \code{NULL}, enables early stopping:
-#'   after fitting order \eqn{n} (at time \eqn{t=n+1}), the recursion stops when the maximum absolute entry
-#'   of the highest-lag coefficient matrix satisfies \code{max(abs(Theta[[t]][[n]])) < lag_tol}.
-#'   Default \code{1e-8}. Use \code{NULL} to disable tolerance stopping.
+#' @param lag_tol Optional nonnegative scalar. If not \code{NULL}, enables an \strong{adaptive lag-length rule}.
+#'   As the recursion progresses, lag coefficients typically decay toward zero. Once the \strong{oldest retained}
+#'   lag coefficient is sufficiently small (i.e., \code{max(abs(Theta[[t]][[L_t]])) < lag_tol}),
+#'   the algorithm \strong{fixes} the effective lag length for subsequent times (returns \code{lag_max_used}).
+#'   Default \code{1e-8}. Use \code{NULL} to disable tolerance-based lag fixing.
 #'
 #' @param ahead Integer \eqn{h \ge 1}. If not \code{NULL}, also compute the \eqn{h}-step-ahead conditional mean
 #'   \eqn{E[u_t \mid u_{1:(t-h)}]} based on the innovations representation. If \code{1L},
@@ -63,15 +66,18 @@
 #'
 #' @return A named list with components:
 #' \describe{
-#'   \item{Theta}{List of length \eqn{T}. Each \code{Theta[[t]]} is a list of length \code{t-1} (or frozen length),
-#'     where \code{Theta[[t]][[j]]} is an \eqn{m\times m} coefficient matrix multiplying \code{innov[t-j, ]}.}
+#'   \item{Theta}{List of length \eqn{T}. Each \code{Theta[[t]]} is a list of length
+#'     \code{L_t = min(t-1, lag_max_used)}, where \code{Theta[[t]][[j]]} is an \eqn{m\times m}
+#'     coefficient matrix multiplying \code{innov[t-j, ]}.}
 #'   \item{V}{List of length \eqn{T}. Each \code{V[[t]]} is an \eqn{m\times m} innovation covariance matrix \eqn{V_t}.}
 #'   \item{uhat}{Numeric matrix \eqn{T\times m} of one-step conditional means \eqn{\hat u_t}.}
 #'   \item{innov}{Numeric matrix \eqn{T\times m} of one-step innovations \eqn{e_t}.}
 #'   \item{uhat_ahead}{If \code{ahead} is not \code{NULL}, numeric matrix \eqn{T\times m} of \eqn{h}-step-ahead means;
 #'     otherwise \code{NULL}.}
-#'   \item{mylag}{Integer. The final recursion order actually computed (may be \code{< T-1} due to \code{lag_max}
-#'     or early stopping via \code{lag_tol}).}
+#'   \item{lag_max_used}{Integer. The final effective lag length used after applying \code{lag_max} and (if enabled)
+#'     the tolerance rule \code{lag_tol}.}
+#'   \item{lag_used_path}{Integer vector of length \eqn{T}. Entry \code{lag_used_path[t]} equals \code{L_t}, the number
+#'     of lag matrices actually used at time \eqn{t}.}
 #' }
 #'
 #' @details

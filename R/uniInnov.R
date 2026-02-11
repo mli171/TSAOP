@@ -4,8 +4,9 @@
 #' process \eqn{u_1,\dots,u_T} with covariance \eqn{K(i,j)}. The routine builds
 #' the (time-varying) linear prediction coefficients \eqn{\theta_t} and
 #' innovation variances \eqn{v_t} such that
-#' \deqn{\hat u_t = \sum_{j=1}^{t-1} \theta_{t,j}\, e_{t-j}, \qquad e_t = u_t - \hat u_t,}
-#' where \eqn{e_t} are one-step innovations with variance \eqn{v_t}.
+#' \deqn{\hat u_t = \sum_{j=1}^{L_t} \theta_{t,j}\, e_{t-j}, \qquad e_t = u_t - \hat u_t,}
+#' where \eqn{e_t} are one-step innovations with variance \eqn{v_t}, and
+#' \eqn{L_t \le t-1} is the number of lag coefficients retained at time \eqn{t}.
 #'
 #' This wrapper supports three interchangeable covariance backends:
 #' \itemize{
@@ -34,14 +35,15 @@
 #' @param jitter Nonnegative scalar added to each innovation variance \code{v[t]} to improve numerical stability
 #'   when the covariance is near-singular. Default \code{1e-10}.
 #'
-#' @param lag_max Optional integer. If \code{NULL} (default) the algorithm runs up to order \eqn{T-1}.
-#'   If supplied, the recursion is computed up to \code{min(lag_max, T-1)} and then \strong{frozen}:
-#'   for later times the same coefficient vector and variance are reused (fixed-order approximation).
+#' @param lag_max Optional integer. If \code{NULL} (default), the algorithm may retain up to \eqn{T-1} lags.
+#'   If supplied, \code{lag_max} is a \strong{hard cap} on the number of lag coefficients retained/used:
+#'   at each time \eqn{t}, \code{theta[[t]]} has length \code{L_t = min(t-1, lag_max_used)}, where
+#'   \code{lag_max_used <= lag_max}. This controls memory and computation.
 #'
-#' @param lag_tol Optional nonnegative scalar. If not \code{NULL}, enables early stopping:
-#'   after fitting order \eqn{n} (at time \eqn{t=n+1}), the recursion stops when the highest-lag
-#'   coefficient satisfies \code{abs(theta[[t]][n]) < lag_tol}. Default \code{1e-8}. Use \code{NULL}
-#'   to disable tolerance stopping.
+#' @param lag_tol Optional nonnegative scalar. If not \code{NULL}, enables an \strong{adaptive lag-length rule}.
+#'   Once the \strong{oldest retained} coefficient satisfies \code{abs(theta[[t]][L_t]) < lag_tol},
+#'   the effective lag length is \strong{fixed} for subsequent times (returns \code{lag_max_used}).
+#'   Default \code{1e-8}. Use \code{NULL} to disable tolerance-based lag fixing.
 #'
 #' @param ahead Integer \eqn{h \ge 1} controlling the \eqn{h}-step-ahead conditional mean output.
 #'   If \code{NULL}, no \code{uhat_ahead} is computed. If \code{1L}, \code{uhat_ahead} equals \code{uhat}.
@@ -51,17 +53,17 @@
 #'
 #' @return A named list with components:
 #' \describe{
-#'   \item{theta}{List of length \eqn{T}. Element \code{theta[[t]]} is a numeric vector of length \code{t-1}
-#'     containing coefficients for predicting \code{u[t]} from past innovations. For fixed-order runs
-#'     (\code{lag_max} or early stopping via \code{lag_tol}), entries after \code{mylag+1} reuse the frozen vector.}
+#'   \item{theta}{List of length \eqn{T}. Element \code{theta[[t]]} is a numeric vector of length
+#'     \code{L_t = min(t-1, lag_max_used)} containing coefficients for predicting \code{u[t]} from past innovations.}
 #'   \item{v}{Numeric vector of length \eqn{T} giving innovation variances \eqn{v_t}.}
 #'   \item{uhat}{Numeric vector of length \eqn{T} giving one-step fitted means \eqn{\hat u_t}.}
 #'   \item{innov}{Numeric vector of length \eqn{T} giving one-step innovations \eqn{e_t}.}
 #'   \item{uhat_ahead}{If \code{ahead} is not \code{NULL}, numeric vector of length \eqn{T} giving the
-#'     \eqn{h}-step-ahead conditional mean \eqn{E[u_t \mid u_{1:(t-h)}]} under the innovations representation;
-#'     otherwise \code{NULL}.}
-#'   \item{mylag}{Integer. The final recursion order actually computed (may be \code{< T-1} due to \code{lag_max}
-#'     or early stopping via \code{lag_tol}).}
+#'     \eqn{h}-step-ahead conditional mean \eqn{E[u_t \mid u_{1:(t-h)}]}; otherwise \code{NULL}.}
+#'   \item{lag_max_used}{Integer. The final effective lag length used after applying \code{lag_max} and (if enabled)
+#'     the tolerance rule \code{lag_tol}.}
+#'   \item{lag_used_path}{Integer vector of length \eqn{T}. Entry \code{lag_used_path[t]} equals \code{L_t}, the number
+#'     of lag coefficients actually used at time \eqn{t}.}
 #' }
 #'
 #' @details
@@ -108,9 +110,9 @@
 #' fitF <- uniInnov(u = x, kappa = kappa_ar1(phi, sigma2, Tt))
 #' all.equal(fit$v, fitF$v, tolerance = 1e-8)
 #'
-#' # Example 4: Fixed-order approximation + early stopping
+#' # Example 4: Fixed-order approximation + tolerance-based lag fixing
 #' fitApprox <- uniInnov(u = x, gamma = gamma, lag_max = 20L, lag_tol = 1e-6, ahead = NULL)
-#' fitApprox$mylag
+#' fitApprox$lag_max_used
 #'
 #' @export
 uniInnov <- function(u, gamma = NULL, K = NULL, kappa = NULL,
@@ -119,6 +121,7 @@ uniInnov <- function(u, gamma = NULL, K = NULL, kappa = NULL,
 
   u <- as.numeric(u)
   if (length(u) < 1L) stop("u must have length >= 1.")
+  Tt <- length(u)
 
   n_backends <- (!is.null(gamma)) + (!is.null(K)) + (!is.null(kappa))
   if (n_backends != 1L) stop("Provide exactly one of: gamma, K, or kappa.")
@@ -130,12 +133,10 @@ uniInnov <- function(u, gamma = NULL, K = NULL, kappa = NULL,
     lag_max <- as.integer(lag_max)
     if (!is.finite(lag_max) || lag_max < 1L) stop("lag_max must be >= 1 or NULL.")
   }
-
   if (!is.null(lag_tol)) {
     lag_tol <- as.numeric(lag_tol)
     if (!is.finite(lag_tol) || lag_tol < 0) stop("lag_tol must be finite and >= 0, or NULL.")
   }
-
   if (!is.null(ahead)) {
     ahead <- as.integer(ahead)
     if (!is.finite(ahead) || ahead < 1L) stop("ahead must be >= 1 or NULL.")
@@ -143,11 +144,20 @@ uniInnov <- function(u, gamma = NULL, K = NULL, kappa = NULL,
 
   if (!is.null(gamma)) {
     gamma <- as.numeric(gamma)
+    if (length(gamma) < 1L) stop("gamma must have length >= 1.")
+    # Optional helpful check: enough lags for requested truncation
+    needL <- if (is.null(lag_max)) Tt else (min(lag_max, Tt - 1L) + 1L)
+    if (length(gamma) < needL) {
+      stop("gamma is too short: need at least ", needL, " entries for this T/lag_max.")
+    }
+
     .Call("innovations_uni_gamma", gamma, u, jitter, lag_max, lag_tol, ahead, PACKAGE = PACKAGE)
 
   } else if (!is.null(K)) {
     if (!is.matrix(K)) K <- as.matrix(K)
     storage.mode(K) <- "double"
+    if (nrow(K) != Tt || ncol(K) != Tt) stop("K must be a T x T matrix with T=length(u).")
+
     .Call("innovations_uni_K", K, u, jitter, lag_max, lag_tol, ahead, PACKAGE = PACKAGE)
 
   } else {

@@ -63,27 +63,31 @@ static SEXP innovations_uni_core(const kappa_ctx_t *ctx,
                                  int lag_tol_is_null, double lag_tol,
                                  int ahead_is_null, int ahead)
 {
+  int nprot = 0;
+
   // coerce u to REAL
-  SEXP uR = PROTECT(Rf_coerceVector(uSEXP, REALSXP));
+  SEXP uR = PROTECT(Rf_coerceVector(uSEXP, REALSXP)); nprot++;
   int Tt  = Rf_length(uR);
   if (Tt < 1) error("u must have length >= 1");
   const double *u = REAL(uR);
 
   int max_n = Tt - 1;
 
-  // lag cap
-  int lag_cap;
+  // initial cap (memory/compute cap)
+  int lag_cap0;
   if (lag_max_is_null) {
-    lag_cap = max_n;
+    lag_cap0 = max_n;
   } else {
     if (lag_max < 1) error("lag_max must be >= 1 or NULL");
-    lag_cap = (lag_max < max_n) ? lag_max : max_n;
+    lag_cap0 = (lag_max < max_n) ? lag_max : max_n;
   }
+  if (lag_cap0 < 0) lag_cap0 = 0;
 
   // tol stop
   int do_tol_stop = !lag_tol_is_null;
   if (do_tol_stop) {
-    if (!R_FINITE(lag_tol) || lag_tol < 0) error("lag_tol must be finite and >= 0, or NULL");
+    if (!R_FINITE(lag_tol) || lag_tol < 0)
+      error("lag_tol must be finite and >= 0, or NULL");
   }
 
   // ahead
@@ -93,9 +97,14 @@ static SEXP innovations_uni_core(const kappa_ctx_t *ctx,
   }
 
   // outputs
-  SEXP theta = PROTECT(Rf_allocVector(VECSXP, Tt));
-  SEXP v     = PROTECT(Rf_allocVector(REALSXP, Tt));
+  SEXP theta = PROTECT(Rf_allocVector(VECSXP, Tt)); nprot++;
+  SEXP v     = PROTECT(Rf_allocVector(REALSXP, Tt)); nprot++;
   double *vR = REAL(v);
+
+  // diagnostics
+  SEXP lag_pathS = PROTECT(Rf_allocVector(INTSXP, Tt)); nprot++;
+  int *lag_path = INTEGER(lag_pathS);
+  for (int tt = 0; tt < Tt; ++tt) lag_path[tt] = 0;
 
   // t = 1
   SET_VECTOR_ELT(theta, 0, Rf_allocVector(REALSXP, 0));
@@ -103,86 +112,105 @@ static SEXP innovations_uni_core(const kappa_ctx_t *ctx,
   if (v1 < 0) v1 = 0;
   vR[0] = v1 + jitter;
 
-  int mylag = 0;
+  // adaptive lag length
+  int Lcurr = lag_cap0;
+  int lag_fixed = 0;
+  lag_path[0] = 0;
 
-  // build theta, v up to lag_cap (possibly early stop)
-  if (max_n >= 1 && lag_cap >= 1) {
-    for (int n = 1; n <= lag_cap; ++n) {     // n = t-1
-      int t = n + 1;                         // current time, 1-based
-      double *th = (double*) R_alloc(n, sizeof(double)); // th[0..n-1] corresponds to lags 1..n
+  // build theta, v for ALL times t=2..Tt, but only store Lt lags each time
+  if (max_n >= 1 && Lcurr >= 1) {
+    for (int n = 1; n <= max_n; ++n) {     // n = t-1
+      int t = n + 1;                       // 1-based time
 
-      // reverse-order computation
-      for (int k = 0; k <= (n - 1); ++k) {
+      int Lt = (n < Lcurr) ? n : Lcurr;    // number of lags stored at time t
+      lag_path[t - 1] = Lt;
+
+      SEXP thR = PROTECT(Rf_allocVector(REALSXP, Lt)); nprot++;
+      double *th = REAL(thR);              // th[0..Lt-1] = lags 1..Lt
+
+      // compute only k in {n-Lt, ..., n-1}
+      int k_start = n - Lt;
+
+      for (int k = k_start; k <= (n - 1); ++k) {
+        int ell = n - k;                   // lag index in 1..Lt
         double term = getK(ctx, t, k + 1);
 
         if (k >= 1) {
-          // theta[[k+1]] has length k (lags 1..k)
-          SEXP theta_k1 = VECTOR_ELT(theta, k); // (k+1)-1 = k
+          // theta[[k+1]] has length Lk
+          SEXP theta_k1 = VECTOR_ELT(theta, k);     // time k+1
           const double *th_k1 = REAL(theta_k1);
+          int Lk = Rf_length(theta_k1);
 
-          for (int j = 0; j <= (k - 1); ++j) {
-            int idx_th    = (n - j) - 1;      // th[n-j]
-            int idx_theta = (k - j) - 1;      // theta[[k+1]][k-j]
-            term -= th[idx_th] * vR[j] * th_k1[idx_theta];
+          int j0 = 0;
+          int a = n - Lt; if (a > j0) j0 = a;       // ensure ell_tj = n-j <= Lt
+          int b = k - Lk; if (b > j0) j0 = b;       // ensure ell_kj = k-j <= Lk
+
+          if (j0 <= (k - 1)) {
+            for (int j = j0; j <= (k - 1); ++j) {
+              int ell_tj = n - j;                   // 1..Lt
+              int ell_kj = k - j;                   // 1..Lk
+              term -= th[ell_tj - 1] * vR[j] * th_k1[ell_kj - 1];
+            }
           }
         }
 
-        // th[n-k] = term / v[k+1]
-        int idx_store = (n - k) - 1;
-        th[idx_store] = term / vR[k];
+        // th[ell] = term / v[k+1] (vR[k] is v[k+1] in 0-based)
+        th[ell - 1] = term / vR[k];
       }
 
-      // update v[t]
+      // update v[t] using only retained lags (j in {n-Lt,...,n-1})
       double vt = getK(ctx, t, t);
-      for (int j = 0; j <= (n - 1); ++j) {
-        int idx_th = (n - j) - 1;     // th[n-j]
-        double a = th[idx_th];
+      int j0v = n - Lt;
+      if (j0v < 0) j0v = 0;
+
+      for (int j = j0v; j <= (n - 1); ++j) {
+        int ell = n - j;                   // 1..Lt
+        double a = th[ell - 1];
         vt -= a * a * vR[j];
       }
       if (vt < 0) vt = 0;
       vR[t - 1] = vt + jitter;
 
-      // store theta[[t]] = th
-      SEXP thR = Rf_allocVector(REALSXP, n);
-      double *thOut = REAL(thR);
-      for (int i = 0; i < n; ++i) thOut[i] = th[i];
+      // store theta[[t]] = thR
       SET_VECTOR_ELT(theta, t - 1, thR);
 
-      mylag = n;
-
-      if (do_tol_stop) {
-        // highest-lag coefficient is th[n]
-        if (fabs(th[n - 1]) < lag_tol) break;
+      // tol rule: once boundary coef is small, fix lag length forever
+      if (!lag_fixed && do_tol_stop && Lt >= 1) {
+        if (fabs(th[Lt - 1]) < lag_tol) {
+          Lcurr = Lt;
+          lag_fixed = 1;
+        }
       }
+
+      UNPROTECT(1); nprot--;  // thR
+    }
+  } else {
+    // if no lags allowed, fill theta[[t]] with empty and v[t]=K(t,t)+jitter
+    for (int t = 2; t <= Tt; ++t) {
+      SET_VECTOR_ELT(theta, t - 1, Rf_allocVector(REALSXP, 0));
+      double vt = getK(ctx, t, t);
+      if (vt < 0) vt = 0;
+      vR[t - 1] = vt + jitter;
+      lag_path[t - 1] = 0;
     }
   }
 
-  // fill remaining times with fixed order mylag
-  if (mylag < max_n) {
-    // theta[[mylag+1]] in R => index mylag in C
-    SEXP theta_fixed = VECTOR_ELT(theta, mylag);
-    double v_fixed = vR[mylag];
-
-    for (int tt = mylag + 1; tt < Tt; ++tt) {   // R: (mylag+2):Tt
-      SET_VECTOR_ELT(theta, tt, theta_fixed);
-      vR[tt] = v_fixed;
-    }
-  }
+  int lag_max_used = Lcurr;   // what you actually used after fixing
 
   // innovations and 1-step uhat
-  SEXP uhat  = PROTECT(Rf_allocVector(REALSXP, Tt));
-  SEXP innov = PROTECT(Rf_allocVector(REALSXP, Tt));
+  SEXP uhat  = PROTECT(Rf_allocVector(REALSXP, Tt)); nprot++;
+  SEXP innov = PROTECT(Rf_allocVector(REALSXP, Tt)); nprot++;
   double *uhR = REAL(uhat);
   double *inR = REAL(innov);
 
   uhR[0] = 0.0;
   inR[0] = u[0];
 
-  for (int t = 2; t <= Tt; ++t) {      // 1-based t
+  for (int t = 2; t <= Tt; ++t) {
     SEXP thS = VECTOR_ELT(theta, t - 1);
     const double *th = REAL(thS);
     int len = Rf_length(thS);
-    int jmax = len < (t - 1) ? len : (t - 1);
+    int jmax = (len < (t - 1)) ? len : (t - 1);
 
     double pred = 0.0;
     for (int j = 1; j <= jmax; ++j) {
@@ -196,21 +224,20 @@ static SEXP innovations_uni_core(const kappa_ctx_t *ctx,
   SEXP uhat_ahead = R_NilValue;
   if (compute_ahead) {
     if (ahead == 1) {
-      uhat_ahead = uhat; // same object is fine
+      uhat_ahead = uhat;
     } else {
-      uhat_ahead = PROTECT(Rf_allocVector(REALSXP, Tt));
+      uhat_ahead = PROTECT(Rf_allocVector(REALSXP, Tt)); nprot++;
       double *uha = REAL(uhat_ahead);
 
       for (int t = 1; t <= Tt; ++t) {
         if (t <= ahead) {
           uha[t - 1] = 0.0;
         } else {
-          int origin = t - ahead;               // 1-based
-          // theta[[origin+1]] in R => index origin in C
-          SEXP thS = VECTOR_ELT(theta, origin);
+          int origin = t - ahead;                 // 1-based
+          SEXP thS = VECTOR_ELT(theta, origin);   // theta[[origin+1]] in R
           const double *th = REAL(thS);
           int len = Rf_length(thS);
-          int jmax = len < (t - 1) ? len : (t - 1);
+          int jmax = (len < (t - 1)) ? len : (t - 1);
 
           double pred = 0.0;
           if (jmax >= ahead) {
@@ -221,19 +248,22 @@ static SEXP innovations_uni_core(const kappa_ctx_t *ctx,
           uha[t - 1] = pred;
         }
       }
-      UNPROTECT(1); // uhat_ahead
     }
   }
 
-  // assemble return list
-  SEXP out = PROTECT(Rf_allocVector(VECSXP, 6));
-  SEXP nm  = PROTECT(Rf_allocVector(STRSXP, 6));
+  // assemble return list (expanded)
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 8)); nprot++;
+  SEXP nm  = PROTECT(Rf_allocVector(STRSXP, 8)); nprot++;
+
   SET_STRING_ELT(nm, 0, Rf_mkChar("theta"));
   SET_STRING_ELT(nm, 1, Rf_mkChar("v"));
   SET_STRING_ELT(nm, 2, Rf_mkChar("uhat"));
   SET_STRING_ELT(nm, 3, Rf_mkChar("innov"));
   SET_STRING_ELT(nm, 4, Rf_mkChar("uhat_ahead"));
-  SET_STRING_ELT(nm, 5, Rf_mkChar("mylag"));
+  SET_STRING_ELT(nm, 5, Rf_mkChar("lag_max_used"));
+  SET_STRING_ELT(nm, 6, Rf_mkChar("lag_used_path"));
+  SET_STRING_ELT(nm, 7, Rf_mkChar("mylag")); // alias
+
   Rf_setAttrib(out, R_NamesSymbol, nm);
 
   SET_VECTOR_ELT(out, 0, theta);
@@ -241,11 +271,14 @@ static SEXP innovations_uni_core(const kappa_ctx_t *ctx,
   SET_VECTOR_ELT(out, 2, uhat);
   SET_VECTOR_ELT(out, 3, innov);
   SET_VECTOR_ELT(out, 4, uhat_ahead);
-  SET_VECTOR_ELT(out, 5, Rf_ScalarInteger(mylag));
+  SET_VECTOR_ELT(out, 5, Rf_ScalarInteger(lag_max_used));
+  SET_VECTOR_ELT(out, 6, lag_pathS);
+  SET_VECTOR_ELT(out, 7, Rf_ScalarInteger(lag_max_used));
 
-  UNPROTECT(7); // uR, theta, v, uhat, innov, out, nm
+  UNPROTECT(nprot);
   return out;
 }
+
 
 // ---- .Call entry points ----
 
