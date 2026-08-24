@@ -83,7 +83,7 @@ aop_sim <- function(ci, theta, rho, K, Ts, DesignX,
     for (j in 2:(psi_trunc + 1L)) {
       jj <- j - 1L
       kmax <- min(p_order, jj)
-      psi[j] <- sum(phi[1:kmax] * psi[(j - 1L) - (1:kmax)])
+      psi[j] <- sum(phi[1:kmax] * psi[j - (1:kmax)])
     }
     var_unit <- sum(psi^2)
     if (!is.finite(var_unit) || var_unit <= tol) stop("Failed to compute AR(p) scaling (non-finite variance).")
